@@ -135,6 +135,41 @@ def _parse_load_curve_csv_days(payload: str | bytes) -> tuple[LoadCurveDay, ...]
         raise LoadCurveParseError("CSV is empty")
 
     header = [cell.strip().strip('"') for cell in rows[0]]
+
+    # The portal's 60-minute export uses human-readable hour columns instead
+    # of the Q1..Q96/frequency/register format used by its maximum-granularity
+    # export. The selected page energy type is consumed active energy (WI),
+    # represented as EA in Home Assistant.
+    hourly_header = len(header) >= 2 and header[0] == "Zi" and all(
+        re.fullmatch(r"\d{1,2}:00\s*-\s*\d{1,2}:00", column, re.IGNORECASE)
+        for column in header[1:]
+    )
+    if hourly_header:
+        hour_positions = [int(column.split(":", 1)[0]) for column in header[1:]]
+        grouped: dict[date, dict[str, Any]] = {}
+        for row in rows[1:]:
+            if not row or not any(cell.strip() for cell in row):
+                continue
+            if len(row) < len(header):
+                row = row + [""] * (len(header) - len(row))
+            raw_day = row[0].strip().strip('"')
+            current_day = _parse_date(raw_day)
+            if current_day is None:
+                raise LoadCurveParseError(f"Invalid export date: {raw_day!r}")
+            values: list[float | None] = [None] * (max(hour_positions) + 1)
+            for column_index, hour in enumerate(hour_positions, start=1):
+                values[hour] = _parse_number(row[column_index])
+            grouped[current_day] = {
+                "frequency": 60,
+                "registers": {"EA": tuple(values)},
+            }
+        if not grouped:
+            raise LoadCurveParseError("CSV contains no data rows")
+        return tuple(
+            LoadCurveDay(day, values["frequency"], values["registers"])
+            for day, values in sorted(grouped.items())
+        )
+
     if len(header) < 4 or header[:3] != ["Zi", "Frecventa", "Marime"]:
         raise LoadCurveParseError("Unexpected load-curve header")
 
@@ -315,6 +350,37 @@ def _structured_rows(value: Any, inherited_day: date | None = None) -> list[tupl
         value, ("frequency", "frequencyMinutes", "Frecventa", "interval")
     )
 
+    # The monthly curve service returns one semicolon-separated value per hour
+    # in ``sampleValues``. This is the shape emitted by the currently signed-in
+    # portal page and is distinct from the daily scalar ``values`` response.
+    raw_sample_values = _first_value(value, ("sampleValues", "sample_values"))
+    if raw_sample_values is None:
+        candidate_values = _first_value(value, ("values",))
+        if isinstance(candidate_values, str) and ";" in candidate_values:
+            raw_sample_values = candidate_values
+    if isinstance(raw_sample_values, str):
+        interval_values = [_numeric(item) for item in raw_sample_values.split(";")]
+        if current_day is not None and any(item is not None for item in interval_values):
+            rows.append(
+                (
+                    current_day,
+                    _frequency_for(interval_values, explicit_frequency),
+                    register,
+                    interval_values,
+                )
+            )
+    elif isinstance(raw_sample_values, list):
+        interval_values = [_numeric(item) for item in raw_sample_values]
+        if current_day is not None and any(item is not None for item in interval_values):
+            rows.append(
+                (
+                    current_day,
+                    _frequency_for(interval_values, explicit_frequency),
+                    register,
+                    interval_values,
+                )
+            )
+
     direct_values = _values_from_mapping(value)
     if direct_values is not None and current_day is not None:
         rows.append(
@@ -403,7 +469,10 @@ def parse_load_curve_response(payload: Any) -> LoadCurveMonth:
         payload = payload.decode("utf-8-sig")
     if isinstance(payload, str):
         text = payload.lstrip("\ufeff")
-        if "Zi;Frecventa;Marime" in text[:200]:
+        if (
+            "Zi;Frecventa;Marime" in text[:200]
+            or re.match(r"Zi;(?:\d{1,2}:00\s*-\s*\d{1,2}:00)(?:;|$)", text)
+        ):
             return parse_load_curve_csv_month(text)
         try:
             payload = json.loads(text)

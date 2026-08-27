@@ -64,6 +64,28 @@ class LoadCurveTests(unittest.TestCase):
         self.assertEqual(month.daily_totals(), {"2026-08-24": 1.1, "2026-08-25": 1.5})
         self.assertEqual(month.latest_day.day.isoformat(), "2026-08-25")
 
+    def test_portal_sample_values_response_is_supported(self) -> None:
+        month = parse_load_curve_response(
+            [
+                {
+                    "sampleValues": "0,5;0,6;0,7",
+                    "sampleDate": "26/08/2026 00:00",
+                    "energyType": "WI",
+                }
+            ]
+        )
+        self.assertEqual(month.latest_day.frequency_minutes, 60)
+        self.assertEqual(month.latest_day.hourly_totals(), (0.5, 0.6, 0.7, *([None] * 21)))
+
+    def test_portal_hourly_csv_is_supported(self) -> None:
+        csv = (
+            "Zi;00:00 - 01:00;01:00 - 02:00;23:00 - 00:00\n"
+            '"26.08.2026";"0,5";"0,6";"1,4"\n'
+        )
+        month = parse_load_curve_response(csv)
+        self.assertEqual(month.latest_day.frequency_minutes, 60)
+        self.assertEqual(month.latest_day.registers["EA"], (0.5, 0.6, *([None] * 21), 1.4))
+
     def test_hourly_sample_objects_are_merged(self) -> None:
         month = parse_load_curve_response(
             [

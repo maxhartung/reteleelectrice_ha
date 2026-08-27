@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -182,6 +183,7 @@ def _portal_fragment_score(value: Any) -> int:
     field_weights = {
         "dataIstantValueList": 100,
         "energyReadingList": 80,
+        "sampleValues": 80,
         "XML_Readings": 80,
         "sampleDate": 60,
         "P_VALUE": 50,
@@ -191,6 +193,7 @@ def _portal_fragment_score(value: Any) -> int:
         "messaggio": 40,
         "measureDate": 40,
         "ENERGY_TYPE": 40,
+        "energyType": 40,
         "typeofenergy_measured": 40,
         "row": 30,
         "rows": 30,
@@ -199,6 +202,7 @@ def _portal_fragment_score(value: Any) -> int:
         "Frecventa": 20,
         "POD": 20,
         "POD__c": 20,
+        "values": 20,
         "Result": 1,
         "status": 1,
         "PowerOutages": 1,
@@ -552,7 +556,9 @@ class ReteleElectriceClient:
                 resolved_form_id: resolved_form_id,
                 "methodN": method_name,
                 "params": ",".join(str(value) for value in method_params),
-                "uniqueId": f"script_{int(time.time())}",
+                # The portal's JavaScript proxy supplies a UUID here. A
+                # timestamp/prefixed value is rejected by some VF releases.
+                "uniqueId": str(uuid.uuid4()),
             }
         )
         action_match = re.search(
@@ -739,7 +745,7 @@ class ReteleElectriceClient:
         pod_name: str,
         year: int,
         month: int,
-        energy_type: str = "EA",
+        energy_type: str = "WI",
     ) -> LoadCurveMonth:
         """Fetch one month's active-consumption curve.
 
@@ -761,11 +767,10 @@ class ReteleElectriceClient:
         try:
             result = await self._call_vf_ws("CurveDiCaricoGraph", method_params)
         except PortalError as first_error:
-            # Some portal releases use WI for the same curve while the CSV
-            # export and current UI use the EA register. Try the legacy code
-            # once when the preferred code is rejected by the backend.
-            if energy_type != "WI" and "HTTP 500" in str(first_error):
-                method_params[1] = "WI"
+            # Some older portal releases use EA for the same curve. Try it
+            # once when the current UI-compatible WI request is rejected.
+            if energy_type != "EA" and "HTTP 500" in str(first_error):
+                method_params[1] = "EA"
                 result = await self._call_vf_ws("CurveDiCaricoGraph", method_params)
             else:
                 raise
