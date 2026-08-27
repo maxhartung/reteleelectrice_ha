@@ -2,8 +2,10 @@
 
 import ast
 import html
+import json
 from pathlib import Path
 import re
+from urllib.parse import quote
 import unittest
 
 
@@ -53,6 +55,41 @@ class LoginFieldTests(unittest.TestCase):
             submit,
             ("loginPage:loginForm:j_id25", "loginPage:loginForm:j_id25"),
         )
+
+    def test_runtime_config_is_decoded_from_script_url(self) -> None:
+        source = MODULE_PATH.read_text()
+        tree = ast.parse(source)
+        nodes = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_runtime_configs"
+        ]
+        module = ast.Module(
+            body=[
+                ast.ImportFrom(
+                    module="__future__",
+                    names=[ast.alias(name="annotations")],
+                    level=0,
+                ),
+                ast.Import(names=[ast.alias(name="json")]),
+                ast.Import(names=[ast.alias(name="re")]),
+                ast.ImportFrom(
+                    module="urllib.parse",
+                    names=[ast.alias(name="unquote")],
+                    level=0,
+                ),
+                *nodes,
+            ],
+            type_ignores=[],
+        )
+        ast.fix_missing_locations(module)
+        namespace: dict[str, object] = {}
+        exec(compile(module, str(MODULE_PATH), "exec"), namespace)
+        config = {"fwuid": "current-fwuid", "loaded": {"APPLICATION@markup://siteforce:communityApp": "current-app"}}
+        html_value = "/s/sfsites/l/" + quote(
+            json.dumps(config, separators=(",", ":")), safe=""
+        ) + "/resources.js"
+        self.assertEqual(namespace["_runtime_configs"](html_value), [config])
 
 
 if __name__ == "__main__":

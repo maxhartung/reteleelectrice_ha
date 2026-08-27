@@ -8,7 +8,7 @@ import re
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin
 
 import aiohttp
 
@@ -129,6 +129,19 @@ def _json_or_text(payload: str) -> Any:
         return payload
 
 
+def _runtime_configs(shell_html: str) -> list[dict[str, Any]]:
+    """Decode Salesforce runtime JSON embedded in script URLs."""
+    configs: list[dict[str, Any]] = []
+    for encoded in re.findall(r"/s/sfsites/l/([^/]+)/(?:resources|app)\.js", shell_html):
+        try:
+            decoded = json.loads(unquote(encoded))
+        except (json.JSONDecodeError, UnicodeError):
+            continue
+        if isinstance(decoded, dict):
+            configs.append(decoded)
+    return configs
+
+
 class ReteleElectriceClient:
     """Minimal async portal client with dynamic Salesforce bootstrap."""
 
@@ -218,11 +231,25 @@ class ReteleElectriceClient:
         self._logged_in = True
 
     def _extract_bootstrap(self, shell_html: str) -> AuraBootstrap:
-        fwuid_match = re.search(r"[\"']fwuid[\"']\s*:\s*[\"']([^\"']+)", shell_html)
-        app_match = re.search(
+        runtime_configs = _runtime_configs(shell_html)
+        fwuid_match = re.search(r"/auraFW/javascript/([^/]+)/aura_prod\.js", shell_html)
+        app_uid = ""
+        fwuid = fwuid_match.group(1) if fwuid_match else ""
+        for config in runtime_configs:
+            fwuid = fwuid or str(config.get("fwuid") or "")
+            loaded = config.get("loaded")
+            if isinstance(loaded, dict):
+                app_uid = app_uid or str(
+                    loaded.get("APPLICATION@markup://siteforce:communityApp") or ""
+                )
+
+        plain_fwuid_match = re.search(r"[\"']fwuid[\"']\s*:\s*[\"']([^\"']+)", shell_html)
+        plain_app_match = re.search(
             r"APPLICATION@markup://siteforce:communityApp[\"']\s*:\s*[\"']([^\"']+)",
             shell_html,
         )
+        fwuid = fwuid or (plain_fwuid_match.group(1) if plain_fwuid_match else "")
+        app_uid = app_uid or (plain_app_match.group(1) if plain_app_match else "")
         token_match = re.search(r"[\"']aura\.token[\"']\s*[:=]\s*[\"']([^\"']+)", shell_html)
 
         token = token_match.group(1) if token_match else ""
@@ -232,9 +259,9 @@ class ReteleElectriceClient:
                     token = cookie.value
                     break
 
-        if not fwuid_match or not app_match or not token:
+        if not fwuid or not app_uid or not token:
             raise PortalProtocolError("Could not bootstrap current Salesforce Aura metadata")
-        return AuraBootstrap(fwuid_match.group(1), app_match.group(1), token)
+        return AuraBootstrap(fwuid, app_uid, token)
 
     async def _ensure_login(self) -> None:
         if not self.is_logged_in:
