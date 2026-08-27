@@ -32,6 +32,74 @@ def _walk_values(value: Any, keys: tuple[str, ...]) -> Any:
     return None
 
 
+def _register_value(value: Any, register: str) -> Any:
+    """Find a value in either a keyed or typed energy-reading structure."""
+    if isinstance(value, dict):
+        for key in (register, register.upper(), register.lower()):
+            if key in value:
+                return value[key]
+
+        register_type = next(
+            (
+                value.get(key)
+                for key in (
+                    "energyType",
+                    "ENERGY_TYPE",
+                    "register",
+                    "REGISTER",
+                    "code",
+                    "CODE",
+                )
+                if value.get(key) is not None
+            ),
+            None,
+        )
+        if str(register_type).upper() == register.upper():
+            for key in (
+                "value",
+                "VALUE",
+                "reading",
+                "READING",
+                "energyValue",
+                "ENERGY_VALUE",
+                "index",
+                "INDEX",
+            ):
+                if key in value:
+                    return value[key]
+
+        for child in value.values():
+            found = _register_value(child, register)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _register_value(child, register)
+            if found is not None:
+                return found
+    return None
+
+
+def _to_number(value: Any) -> float | None:
+    """Convert portal numbers, including Romanian comma decimals, to float."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace("\u00a0", "").replace(" ", "")
+    if "," in text and "." in text:
+        if text.rfind(",") > text.rfind("."):
+            text = text.replace(".", "").replace(",", ".")
+        else:
+            text = text.replace(",", "")
+    else:
+        text = text.replace(",", ".")
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 class ReteleElectriceSensor(CoordinatorEntity[ReteleElectriceCoordinator], SensorEntity):
     """Base entity for coordinator-backed sensors."""
 
@@ -76,10 +144,9 @@ class ConsumptionSensor(ReteleElectriceSensor):
     @property
     def native_value(self) -> float | None:
         value = _walk_values(self._pod_data, ("EA", "SUM_EA", "active_consumption"))
-        try:
-            return float(value) if value is not None else None
-        except (TypeError, ValueError):
-            return None
+        if value is None:
+            value = _register_value(self._pod_data, "EA")
+        return _to_number(value)
 
 
 class CurrentPowerSensor(ReteleElectriceSensor):
@@ -92,10 +159,7 @@ class CurrentPowerSensor(ReteleElectriceSensor):
     @property
     def native_value(self) -> float | None:
         value = _walk_values(self._pod_data, ("P_VALUE", "active_power", "power"))
-        try:
-            return float(value) if value is not None else None
-        except (TypeError, ValueError):
-            return None
+        return _to_number(value)
 
 
 async def async_setup_entry(

@@ -129,6 +129,54 @@ def _json_or_text(payload: str) -> Any:
         return payload
 
 
+def _json_fragments(payload: str) -> list[Any]:
+    """Extract JSON objects/arrays embedded in an A4J response."""
+    decoder = json.JSONDecoder()
+    fragments: list[Any] = []
+    for source in (payload, html.unescape(payload)):
+        for index, character in enumerate(source):
+            if character not in "[{":
+                continue
+            try:
+                value, _ = decoder.raw_decode(source[index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, (dict, list)) and value not in fragments:
+                fragments.append(value)
+    return fragments
+
+
+def _parse_vf_response(payload: str) -> Any:
+    """Parse a Visualforce A4J response while preserving CSV/text responses."""
+    direct = _json_or_text(payload)
+    if not isinstance(direct, str):
+        return direct
+
+    # A4J usually wraps the actual web-service result in one or more CDATA
+    # blocks inside an XML partial-page response.
+    cdata_blocks = re.findall(r"<!\[CDATA\[(.*?)\]\]>", payload, re.DOTALL)
+    for block in cdata_blocks:
+        fragments = _json_fragments(block)
+        if fragments:
+            return fragments[0]
+
+    fragments = _json_fragments(payload)
+    if fragments:
+        return fragments[0]
+
+    # Some proxy methods return useful values as updated input elements rather
+    # than JSON. Exclude the framework state fields from that fallback.
+    values: dict[str, str] = {}
+    for tag in re.findall(r"<input\b[^>]*>", payload, re.IGNORECASE):
+        attrs = _attributes(tag)
+        name = attrs.get("name") or attrs.get("id")
+        if not name or name.startswith("com.salesforce.visualforce.ViewState"):
+            continue
+        if attrs.get("value"):
+            values[name] = attrs["value"]
+    return values or payload
+
+
 def _runtime_configs(shell_html: str) -> list[dict[str, Any]]:
     """Decode Salesforce runtime JSON embedded in script URLs."""
     configs: list[dict[str, Any]] = []
@@ -379,7 +427,7 @@ class ReteleElectriceClient:
                 raise AuthenticationError("Visualforce session expired")
             if response.status != 200:
                 raise PortalError(f"Visualforce call returned HTTP {response.status}")
-            return _json_or_text(await response.text())
+            return _parse_vf_response(await response.text())
 
     async def async_get_power_outages(self, pod_name: str) -> Any:
         return await self._call_vf_ws("PowerOutages", [pod_name, "RO"])
