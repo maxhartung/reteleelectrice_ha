@@ -65,13 +65,11 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except PortalError as err:
                 LOGGER.warning("Account metadata was unavailable: %s", err)
 
+            # The portal's getContactInfo query raises
+            # ``List has no rows for assignment to SObject`` for some valid
+            # accounts. The integration reads the required profile fields
+            # from account_info, so avoid this unnecessary request entirely.
             contact_info: Any = None
-            try:
-                contact_info = await self.client.async_get_contact_info()
-            except AuthenticationError:
-                raise
-            except PortalError as err:
-                LOGGER.warning("Contact metadata was unavailable: %s", err)
 
             cnp = ""
             if isinstance(account_info, dict):
