@@ -7,6 +7,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import unquote, urljoin
 
@@ -392,6 +393,21 @@ class ReteleElectriceClient:
             calling_descriptor="markup://c:PED_CustomProfileHeader",
         )
 
+    async def async_get_contact_info(self) -> Any:
+        """Return the contact details exposed by the portal profile."""
+        return await self.async_aura_call(
+            "apex://PED_Utility/ACTION$getContactInfo",
+            calling_descriptor="markup://c:PED_CustomProfileHeader",
+        )
+
+    async def async_get_reading_archive_pod_details(self, pod_name: str) -> Any:
+        """Return the identifiers used by the reading-archive VF service."""
+        return await self.async_aura_call(
+            "apex://PED_ReadingArchiveController/ACTION$PODDetails",
+            params={"PodId": pod_name},
+            calling_descriptor="markup://c:PED_Reading_Archive_Tab",
+        )
+
     async def _call_vf_ws(self, method_name: str, method_params: list[str]) -> Any:
         await self._ensure_login()
         page_name = VF_PAGE_MAP.get(method_name)
@@ -434,6 +450,62 @@ class ReteleElectriceClient:
     async def async_get_power_outages(self, pod_name: str) -> Any:
         return await self._call_vf_ws("PowerOutages", [pod_name, "RO"])
 
+    async def async_get_reading_archive(
+        self,
+        pod_name: str,
+        start_date: str = "",
+        end_date: str = "",
+        cui: str = "",
+        cnp: str = "",
+    ) -> Any:
+        """Return the portal's historical meter readings for one POD."""
+        now = datetime.now()
+        if not start_date:
+            start_date = (now - timedelta(days=365)).strftime("%d/%m/%Y 00:00:00")
+        if not end_date:
+            end_date = now.strftime("%d/%m/%Y 23:59:59")
+
+        if not cnp and not cui:
+            details = await self.async_get_reading_archive_pod_details(pod_name)
+            if isinstance(details, dict):
+                cnp = str(details.get("cnp") or details.get("CNP") or "")
+                cui = str(details.get("cui") or details.get("CUI") or "")
+        if not cnp and not cui:
+            account = await self.async_get_account_info()
+            if isinstance(account, dict):
+                cnp = str(account.get("CNP__c") or account.get("Fiscal_Code__c") or "")
+                cui = str(account.get("Univocal_Code__c") or "")
+
+        if cnp:
+            params = ["", "", cnp, pod_name, start_date, end_date]
+        elif cui:
+            params = ["", cui, "", pod_name, start_date, end_date]
+        else:
+            params = ["", "", "", pod_name, start_date, end_date]
+        return await self._call_vf_ws("RetriveSingleSelf", params)
+
+    async def async_get_smart_meter_data(
+        self,
+        pod_name: str,
+        start_date: str = "",
+        end_date: str = "",
+        cnp: str = "",
+    ) -> Any:
+        """Return the smart-meter aggregate for the most recent 90 days."""
+        if not cnp:
+            account = await self.async_get_account_info()
+            if isinstance(account, dict):
+                cnp = str(account.get("CNP__c") or account.get("Fiscal_Code__c") or "")
+        now = datetime.now()
+        if not start_date:
+            start_date = (now - timedelta(days=90)).strftime("%d/%m/%Y 00:00:00")
+        if not end_date:
+            end_date = now.strftime("%d/%m/%Y 23:59:59")
+        return await self._call_vf_ws(
+            "FindOutMeterHistoryData",
+            [cnp, "", pod_name, start_date, end_date],
+        )
+
     async def async_get_smart_meter_current(self, pod_name: str, cnp: str = "") -> Any:
         if not cnp:
             account = await self.async_get_account_info()
@@ -442,9 +514,40 @@ class ReteleElectriceClient:
         return await self._call_vf_ws("FindOutMeterCurrentData", [cnp, "", pod_name])
 
     async def async_get_instant_values(self, pod_name: str, cnp: str = "") -> Any:
+        if not cnp:
+            account = await self.async_get_account_info()
+            if isinstance(account, dict):
+                cnp = str(account.get("CNP__c") or account.get("Fiscal_Code__c") or "")
+        if not cnp:
+            details = await self.async_get_reading_archive_pod_details(pod_name)
+            if isinstance(details, dict):
+                cnp = str(details.get("cnp") or details.get("CNP") or "")
         params = [cnp, "", pod_name]
-        await self._call_vf_ws("ReqMeterInstantData", params)
+        request_result = await self._call_vf_ws("ReqMeterInstantData", params)
+        if isinstance(request_result, dict):
+            status = str(request_result.get("Result") or request_result.get("status") or "")
+            if "error" in status.lower():
+                return request_result
         return await self._call_vf_ws("FindOutMeterInstantData", params)
+
+    async def async_get_supplier_data(self, pod_name: str) -> Any:
+        """Return supplier and technical POD details from the portal."""
+        result = await self._call_vf_ws("queryPOD", [pod_name, "Client_Company"])
+        return self._clean_type_info(result)
+
+    @classmethod
+    def _clean_type_info(cls, value: Any) -> Any:
+        """Remove SOAP/Apex metadata keys from supplier responses."""
+        if isinstance(value, dict):
+            return {
+                key: cls._clean_type_info(item)
+                for key, item in value.items()
+                if not key.endswith("_type_info")
+                and key not in {"apex_schema_type_info", "field_order_type_info"}
+            }
+        if isinstance(value, list):
+            return [cls._clean_type_info(item) for item in value]
+        return value
 
     async def async_get_load_curve(
         self,

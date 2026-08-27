@@ -9,8 +9,12 @@ This project is in early development. It connects directly to the user's portal 
 - Dynamic Salesforce Experience Cloud login and session bootstrap.
 - POD discovery and meter metadata.
 - Current smart-meter values.
+- Separate cumulative instant-consumption/production entities, phase voltage
+  and current attributes, and active-power data when the portal supplies it.
 - Monthly load-curve data at the portal's available granularity (currently
   15-minute data for smart meters), aggregated into hourly and daily values.
+- Reading-archive indexes, annual totals, interruption status, smart-meter
+  aggregates, and supplier/POD metadata when available.
 - Historical readings, outages, and the two-stage consumption-data workflow.
 
 For each POD with curve data, the integration also creates:

@@ -51,11 +51,23 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except PortalError:
                 LOGGER.debug("Account metadata was unavailable", exc_info=True)
 
+            contact_info: Any = None
+            try:
+                contact_info = await self.client.async_get_contact_info()
+            except PortalError:
+                LOGGER.debug("Contact metadata was unavailable", exc_info=True)
+
             cnp = ""
             if isinstance(account_info, dict):
                 cnp = str(account_info.get("CNP__c") or account_info.get("Fiscal_Code__c") or "")
 
             now = dt_util.now()
+            instant_values: dict[str, Any] = {}
+            reading_archive: dict[str, Any] = {}
+            power_outages: dict[str, Any] = {}
+            smart_meter: dict[str, Any] = {}
+            supplier_data: dict[str, Any] = {}
+            pod_reading_details: dict[str, Any] = {}
             for summary in pod_list:
                 pod_name = self._pod_name(summary)
                 if not pod_name:
@@ -65,10 +77,54 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     current["details"] = await self.client.async_get_pod_details(pod_name)
                 except PortalError:
                     LOGGER.debug("POD details unavailable for %s", pod_name, exc_info=True)
+
                 try:
-                    current["smart_meter_current"] = await self.client.async_get_smart_meter_current(pod_name, cnp)
+                    pod_reading_details[pod_name] = (
+                        await self.client.async_get_reading_archive_pod_details(pod_name)
+                    )
                 except PortalError:
-                    LOGGER.debug("Smart-meter current values unavailable for %s", pod_name, exc_info=True)
+                    LOGGER.debug("Reading metadata unavailable for %s", pod_name, exc_info=True)
+
+                try:
+                    archive = await self.client.async_get_reading_archive(pod_name, cnp=cnp)
+                    reading_archive[pod_name] = archive
+                    current["reading_archive"] = archive
+                except PortalError:
+                    LOGGER.debug("Reading archive unavailable for %s", pod_name, exc_info=True)
+
+                try:
+                    outage = await self.client.async_get_power_outages(pod_name)
+                    power_outages[pod_name] = outage
+                    current["power_outages"] = outage
+                except PortalError:
+                    LOGGER.debug("Power-outage data unavailable for %s", pod_name, exc_info=True)
+
+                if self._is_smart_meter(summary):
+                    try:
+                        historical = await self.client.async_get_smart_meter_data(
+                            pod_name, cnp=cnp
+                        )
+                        smart_meter[pod_name] = historical
+                        current["smart_meter"] = historical
+                    except PortalError:
+                        LOGGER.debug("Smart-meter history unavailable for %s", pod_name, exc_info=True)
+                    try:
+                        instant = await self.client.async_get_instant_values(pod_name, cnp)
+                        current["instant_values"] = instant
+                        # Keep the old key for compatibility with existing
+                        # entities and callers.
+                        current["smart_meter_current"] = instant
+                        instant_values[pod_name] = instant
+                    except PortalError:
+                        LOGGER.debug("Instant smart-meter values unavailable for %s", pod_name, exc_info=True)
+
+                try:
+                    supplier = await self.client.async_get_supplier_data(pod_name)
+                    supplier_data[pod_name] = supplier
+                    current["supplier_data"] = supplier
+                except PortalError:
+                    LOGGER.debug("Supplier data unavailable for %s", pod_name, exc_info=True)
+
                 try:
                     current["load_curve"] = await self.client.async_get_load_curve(
                         pod_name,
@@ -79,7 +135,18 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     LOGGER.debug("Load curve unavailable for %s", pod_name, exc_info=True)
                 pod_data[pod_name] = current
 
-            return {"account": account_info, "pods": pod_data}
+            return {
+                "account": account_info,
+                "account_info": account_info,
+                "contact_info": contact_info,
+                "pods": pod_data,
+                "pod_reading_details": pod_reading_details,
+                "reading_archive": reading_archive,
+                "power_outages": power_outages,
+                "smart_meter": smart_meter,
+                "instant_values": instant_values,
+                "supplier_data": supplier_data,
+            }
         except AuthenticationError as err:
             raise UpdateFailed("Authentication expired") from err
         except PortalError as err:
@@ -106,6 +173,11 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         updated_data = dict(data)
         updated_pods = dict(pods)
         updated_pod = dict(updated_pods[pod_name])
+        existing_instant = data.get("instant_values")
+        updated_instant = dict(existing_instant) if isinstance(existing_instant, dict) else {}
+        updated_instant[pod_name] = instant_values
+        updated_data["instant_values"] = updated_instant
+        updated_pod["instant_values"] = instant_values
         updated_pod["smart_meter_current"] = instant_values
         updated_pods[pod_name] = updated_pod
         updated_data["pods"] = updated_pods
@@ -130,3 +202,18 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if value:
                 return str(value)
         return ""
+
+    @staticmethod
+    def _is_smart_meter(summary: dict[str, Any]) -> bool:
+        """Return whether a POD supports the two-step instant-meter API."""
+        keys = ("Smart_meter__c", "IsSmartMeter__c", "smart_meter", "is_smart_meter")
+        present = [key for key in keys if key in summary]
+        if not present:
+            # Some portal responses omit the capability flag. In that case,
+            # try the endpoint and let the portal report unavailable data.
+            return True
+        return any(
+            summary.get(key) is True
+            or str(summary.get(key, "")).strip().lower() in {"true", "1", "yes"}
+            for key in present
+        )

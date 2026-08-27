@@ -11,7 +11,7 @@
   action:
     - service: button.press
       target:
-        entity_id: button.reteleelectrice_ro001eXXXXXXXXX_actualizare_valori_instantanee
+        entity_id: button.reteleelectrice_ro_ro001eXXXXXXXXX_actualizare_instantanee
 
 # Alternative: use this instead of the 15-minute automation if the portal
 # starts rejecting frequent instant-meter requests.
@@ -23,4 +23,4 @@
 #   action:
 #     - service: button.press
 #       target:
-#         entity_id: button.reteleelectrice_ro001eXXXXXXXXX_actualizare_valori_instantanee
+#         entity_id: button.reteleelectrice_ro_ro001eXXXXXXXXX_actualizare_instantanee
