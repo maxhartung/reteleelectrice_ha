@@ -68,13 +68,37 @@ def _form_fields(page: str) -> dict[str, str]:
 
 
 def _find_field_name(page: str, candidates: tuple[str, ...]) -> str:
+    input_tags = re.findall(r"<input\b[^>]*>", page, re.IGNORECASE)
+    if "password" in candidates:
+        for tag in input_tags:
+            attrs = _attributes(tag)
+            if attrs.get("type", "").lower() == "password" and attrs.get("name"):
+                return attrs["name"]
+
     for tag in re.findall(r"<input\b[^>]*>", page, re.IGNORECASE):
         attrs = _attributes(tag)
         name = attrs.get("name", "")
-        lowered = name.lower()
-        if any(candidate in lowered for candidate in candidates):
+        haystack = " ".join(
+            attrs.get(attribute, "")
+            for attribute in ("name", "id", "placeholder", "autocomplete")
+        ).lower()
+        if name and any(candidate.lower() in haystack for candidate in candidates):
             return name
+
+    if "username" in candidates or "email" in candidates:
+        for tag in input_tags:
+            attrs = _attributes(tag)
+            if attrs.get("type", "").lower() in {"email", "text"} and attrs.get("name"):
+                return attrs["name"]
     return candidates[0]
+
+
+def _submit_field(page: str) -> tuple[str, str] | None:
+    for tag in re.findall(r"<input\b[^>]*>", page, re.IGNORECASE):
+        attrs = _attributes(tag)
+        if attrs.get("type", "").lower() in {"submit", "button"} and attrs.get("name"):
+            return attrs["name"], attrs.get("value", "")
+    return None
 
 
 def _extract_frontdoor(page: str) -> str | None:
@@ -146,6 +170,7 @@ class ReteleElectriceClient:
         fields = _form_fields(login_html)
         username_name = _find_field_name(login_html, ("username", "email"))
         password_name = _find_field_name(login_html, ("password", "pw"))
+        submit_field = _submit_field(login_html)
         fields.update(
             {
                 form_id or "loginPage:loginForm": form_id or "loginPage:loginForm",
@@ -153,6 +178,8 @@ class ReteleElectriceClient:
                 password_name: self.password,
             }
         )
+        if submit_field:
+            fields[submit_field[0]] = submit_field[1]
 
         target = urljoin(login_page_url, form_action or login_url)
         async with session.post(
