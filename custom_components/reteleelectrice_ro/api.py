@@ -163,7 +163,10 @@ def _json_fragments(payload: str) -> list[Any]:
                 value, _ = decoder.raw_decode(source[index:])
             except json.JSONDecodeError:
                 continue
-            if isinstance(value, (dict, list)) and value not in fragments:
+            # Salesforce's wrapper contains empty JavaScript objects/arrays
+            # before the actual A4J result. They are not portal data and must
+            # not win the fragment search.
+            if isinstance(value, (dict, list)) and value and value not in fragments:
                 fragments.append(value)
     return fragments
 

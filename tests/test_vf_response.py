@@ -75,6 +75,19 @@ class VfResponseTests(unittest.TestCase):
         payload = f"<ajax-response><update><![CDATA[{csv}]]></update></ajax-response>"
         self.assertEqual(parse(payload), csv)
 
+    def test_empty_wrapper_object_is_ignored(self) -> None:
+        parse = self._parser()
+        payload = (
+            '<script>var wrapper = {};</script>'
+            '<ajax-response><update><![CDATA['
+            '{"dataIstantValueList":[{"P_VALUE":"0,123"}]}'
+            ']]></update></ajax-response>'
+        )
+        self.assertEqual(
+            parse(payload),
+            {"dataIstantValueList": [{"P_VALUE": "0,123"}]},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
