@@ -202,6 +202,13 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             data = self.data
         if not isinstance(data, dict):
             raise UpdateFailed("No coordinator data is available")
+        if not self.client.can_request_instant_values(pod_name):
+            LOGGER.warning(
+                "Skipping instant smart-meter refresh for %s: the portal request "
+                "cooldown has not elapsed",
+                pod_name,
+            )
+            return
 
         account_info = data.get("account")
         cnp = ""

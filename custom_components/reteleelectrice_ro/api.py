@@ -14,7 +14,13 @@ from urllib.parse import unquote, urljoin
 
 import aiohttp
 
-from .const import AURA_URL, BASE_URL, LOGIN_PAGE, VF_PAGE_MAP
+from .const import (
+    AURA_URL,
+    BASE_URL,
+    INSTANT_REQUEST_MIN_INTERVAL,
+    LOGIN_PAGE,
+    VF_PAGE_MAP,
+)
 from .load_curve import LoadCurveMonth, parse_load_curve_response
 
 
@@ -285,6 +291,7 @@ class ReteleElectriceClient:
         self._bootstrap: AuraBootstrap | None = None
         self._action_counter = 0
         self._logged_in = False
+        self._last_instant_requests: dict[str, float] = {}
 
     @property
     def is_logged_in(self) -> bool:
@@ -306,6 +313,13 @@ class ReteleElectriceClient:
         self._bootstrap = None
         if self._owns_session and self._session is not None and not self._session.closed:
             await self._session.close()
+
+    def can_request_instant_values(self, pod_name: str) -> bool:
+        """Return whether a new two-step instant request is outside the cooldown."""
+        last_request = self._last_instant_requests.get(pod_name)
+        return last_request is None or (
+            time.monotonic() - last_request >= INSTANT_REQUEST_MIN_INTERVAL.total_seconds()
+        )
 
     async def async_login(self) -> None:
         """Log in and bootstrap current Aura runtime values."""
@@ -665,6 +679,10 @@ class ReteleElectriceClient:
         return await self._call_vf_ws("FindOutMeterCurrentData", [cnp, "", pod_name])
 
     async def async_get_instant_values(self, pod_name: str, cnp: str = "") -> Any:
+        # Record the start of the two-step operation. The coordinator uses the
+        # same timestamp to prevent a button press from duplicating a request
+        # made by the normal polling cycle.
+        self._last_instant_requests[pod_name] = time.monotonic()
         if not cnp:
             account = await self.async_get_account_info()
             if isinstance(account, dict):

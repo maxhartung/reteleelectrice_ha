@@ -17,6 +17,7 @@ CONF_UPDATE_INTERVAL = "update_interval"
 DEFAULT_UPDATE_INTERVAL = timedelta(hours=1)
 MIN_UPDATE_INTERVAL = timedelta(minutes=15)
 MAX_UPDATE_INTERVAL = timedelta(hours=24)
+INSTANT_REQUEST_MIN_INTERVAL = timedelta(minutes=15)
 
 ATTRIBUTION = "Data from contulmeu.reteleelectrice.ro"
 
