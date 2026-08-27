@@ -13,6 +13,7 @@ class SensorValueTests(unittest.TestCase):
     def _helpers(self) -> dict[str, object]:
         tree = ast.parse(MODULE_PATH.read_text())
         wanted = {
+            "_walk_values",
             "_register_value",
             "_to_number",
             "_rows",
@@ -70,6 +71,16 @@ class SensorValueTests(unittest.TestCase):
         }
         self.assertEqual(namespace["_get_energy_value"](instant, "EA"), 393.476)
         self.assertEqual(namespace["_get_energy_value"](instant, "ER"), 1.25)
+
+    def test_nested_fields_are_case_insensitive(self) -> None:
+        namespace = self._helpers()
+        self.assertEqual(
+            namespace["_walk_values"](
+                {"data": {"sum_ea": "12,5", "p_value": "0,42"}},
+                ("SUM_EA",),
+            ),
+            "12,5",
+        )
 
     def test_archive_years_are_limited_to_two_latest(self) -> None:
         namespace = self._helpers()

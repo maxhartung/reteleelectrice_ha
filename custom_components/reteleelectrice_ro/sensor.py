@@ -25,6 +25,13 @@ def _walk_values(value: Any, keys: tuple[str, ...]) -> Any:
         for key in keys:
             if key in value:
                 return value[key]
+        # Aura/VF wrappers can change the capitalisation of field names while
+        # keeping the same portal payload. Preserve the exact-key fast path,
+        # then accept a case-insensitive match for nested responses.
+        lowered_keys = {key.lower() for key in keys}
+        for actual_key, child in value.items():
+            if str(actual_key).lower() in lowered_keys:
+                return child
         for child in value.values():
             found = _walk_values(child, keys)
             if found is not None:
@@ -218,10 +225,9 @@ def _account_info(coordinator: Any) -> dict[str, Any]:
 
 
 def _instant_row(instant: Any) -> dict[str, Any]:
-    if isinstance(instant, dict):
-        rows = instant.get("dataIstantValueList")
-        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
-            return rows[0]
+    rows = _walk_values(instant, ("dataIstantValueList",))
+    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+        return rows[0]
     return {}
 
 
@@ -510,8 +516,12 @@ class SmartMeterAggregateSensor(ReteleElectriceSensor):
 
     @property
     def native_value(self) -> float | None:
-        rows = _smart_meter_rows(self.coordinator, self._pod)
-        return _to_number(rows[0].get(self._field)) if rows else None
+        data = _data_map(self.coordinator, "smart_meter").get(self._pod)
+        value = _walk_values(data, (self._field,))
+        if value is None:
+            rows = _smart_meter_rows(self.coordinator, self._pod)
+            value = rows[0].get(self._field) if rows else None
+        return _to_number(value)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -679,9 +689,27 @@ class CurrentPowerSensor(ReteleElectriceSensor):
 
     @property
     def native_value(self) -> float | None:
-        value = _walk_values(self._instant_data, ("P_VALUE", "active_power", "power"))
+        value = _walk_values(
+            self._instant_data,
+            (
+                "P_VALUE",
+                "POWER_VALUE",
+                "active_power",
+                "activePower",
+                "power",
+            ),
+        )
         if value is None:
-            value = _walk_values(self._pod_data, ("P_VALUE", "active_power", "power"))
+            value = _walk_values(
+                self._pod_data,
+                (
+                    "P_VALUE",
+                    "POWER_VALUE",
+                    "active_power",
+                    "activePower",
+                    "power",
+                ),
+            )
         return _to_number(value)
 
 

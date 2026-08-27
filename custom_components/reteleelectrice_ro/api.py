@@ -635,6 +635,12 @@ class ReteleElectriceClient:
             account = await self.async_get_account_info()
             if isinstance(account, dict):
                 cnp = str(account.get("CNP__c") or account.get("Fiscal_Code__c") or "")
+        if not cnp:
+            # Some accounts do not expose CNP in getAccountInfo. The reference
+            # integration falls back to the POD metadata for this endpoint.
+            details = await self.async_get_reading_archive_pod_details(pod_name)
+            if isinstance(details, dict):
+                cnp = str(details.get("cnp") or details.get("CNP") or "")
         now = datetime.now()
         if not start_date:
             start_date = (now - timedelta(days=90)).strftime("%d/%m/%Y 00:00:00")
@@ -652,6 +658,10 @@ class ReteleElectriceClient:
             account = await self.async_get_account_info()
             if isinstance(account, dict):
                 cnp = str(account.get("CNP__c") or account.get("Fiscal_Code__c") or "")
+        if not cnp:
+            details = await self.async_get_reading_archive_pod_details(pod_name)
+            if isinstance(details, dict):
+                cnp = str(details.get("cnp") or details.get("CNP") or "")
         return await self._call_vf_ws("FindOutMeterCurrentData", [cnp, "", pod_name])
 
     async def async_get_instant_values(self, pod_name: str, cnp: str = "") -> Any:
