@@ -171,6 +171,33 @@ def _json_fragments(payload: str) -> list[Any]:
     return fragments
 
 
+def _contains_portal_fields(value: Any) -> bool:
+    """Return whether a JSON fragment resembles a portal data result."""
+    marker_names = {
+        "dataIstantValueList",
+        "energyReadingList",
+        "ENERGY_TYPE",
+        "P_VALUE",
+        "sampleDate",
+        "XML_Readings",
+        "measureDate",
+        "Result",
+        "status",
+        "Frecventa",
+        "PowerOutages",
+        "outage",
+        "POD",
+        "POD__c",
+    }
+    if isinstance(value, dict):
+        if any(str(key) in marker_names for key in value):
+            return True
+        return any(_contains_portal_fields(child) for child in value.values())
+    if isinstance(value, list):
+        return any(_contains_portal_fields(child) for child in value)
+    return False
+
+
 def _parse_vf_response(payload: str) -> Any:
     """Parse a Visualforce A4J response while preserving CSV/text responses."""
     direct = _json_or_text(payload)
@@ -182,14 +209,18 @@ def _parse_vf_response(payload: str) -> Any:
     cdata_blocks = re.findall(r"<!\[CDATA\[(.*?)\]\]>", payload, re.DOTALL)
     for block in cdata_blocks:
         fragments = _json_fragments(block)
-        if fragments:
-            return fragments[0]
+        for fragment in fragments:
+            if _contains_portal_fields(fragment):
+                return fragment
         if "Zi;Frecventa;Marime" in block[:200]:
             return html.unescape(block)
 
-    fragments = _json_fragments(payload)
-    if fragments:
-        return fragments[0]
+    # The surrounding Visualforce document contains unrelated JavaScript JSON
+    # objects. Only accept a fragment with fields known from portal results;
+    # otherwise the wrapper itself can be mistaken for meter data.
+    for fragment in _json_fragments(payload):
+        if _contains_portal_fields(fragment):
+            return fragment
 
     # Some proxy methods return useful values as updated input elements rather
     # than JSON. Exclude the framework state fields from that fallback.

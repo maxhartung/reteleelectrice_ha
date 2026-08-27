@@ -11,7 +11,13 @@ MODULE_PATH = Path(__file__).parents[1] / "custom_components" / "reteleelectrice
 class VfResponseTests(unittest.TestCase):
     def _parser(self):
         tree = ast.parse(MODULE_PATH.read_text())
-        wanted = {"_attributes", "_json_or_text", "_json_fragments", "_parse_vf_response"}
+        wanted = {
+            "_attributes",
+            "_json_or_text",
+            "_json_fragments",
+            "_contains_portal_fields",
+            "_parse_vf_response",
+        }
         nodes = [
             node
             for node in tree.body
