@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import ATTRIBUTION, DOMAIN
 from .coordinator import ReteleElectriceCoordinator
+from .load_curve import LoadCurveDay, LoadCurveMonth
 
 
 def _walk_values(value: Any, keys: tuple[str, ...]) -> Any:
@@ -162,6 +163,76 @@ class CurrentPowerSensor(ReteleElectriceSensor):
         return _to_number(value)
 
 
+class LoadCurveSensor(ReteleElectriceSensor):
+    """Base class for values derived from the monthly load curve."""
+
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+
+    @property
+    def _curve(self) -> LoadCurveMonth | None:
+        value = self._pod_data
+        if isinstance(value, dict) and isinstance(value.get("load_curve"), LoadCurveMonth):
+            return value["load_curve"]
+        return None
+
+    @property
+    def _latest_day(self) -> LoadCurveDay | None:
+        return self._curve.latest_day if self._curve else None
+
+    @property
+    def _latest_hour(self) -> tuple[int, float] | None:
+        latest_day = self._latest_day
+        if not latest_day:
+            return None
+        for hour, value in reversed(tuple(enumerate(latest_day.hourly_totals("EA")))):
+            if value is not None:
+                return hour, value
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attributes = super().extra_state_attributes
+        curve = self._curve
+        latest_day = self._latest_day
+        if curve and latest_day:
+            attributes.update(
+                {
+                    "curve_date": latest_day.day.isoformat(),
+                    "curve_frequency_minutes": latest_day.frequency_minutes,
+                    "daily_consumption": curve.daily_totals("EA"),
+                    "hourly_consumption": {
+                        f"{hour:02d}:00": value
+                        for hour, value in enumerate(latest_day.hourly_totals("EA"))
+                        if value is not None
+                    },
+                }
+            )
+            latest_hour = self._latest_hour
+            if latest_hour:
+                attributes["curve_hour"] = f"{latest_hour[0]:02d}:00"
+        return attributes
+
+
+class DailyLoadCurveSensor(LoadCurveSensor):
+    """Total active consumption for the latest day supplied by the portal."""
+
+    @property
+    def native_value(self) -> float | None:
+        latest_day = self._latest_day
+        return latest_day.total("EA") if latest_day else None
+
+
+class HourlyLoadCurveSensor(LoadCurveSensor):
+    """The latest available one-hour active-consumption bucket."""
+
+    @property
+    def native_value(self) -> float | None:
+        latest_hour = self._latest_hour
+        return latest_hour[1] if latest_hour else None
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
@@ -175,5 +246,12 @@ async def async_setup_entry(
         pod_names = []
     entities: list[SensorEntity] = []
     for pod in pod_names:
-        entities.extend((ConsumptionSensor(coordinator, pod, "Consum activ"), CurrentPowerSensor(coordinator, pod, "Putere activă")))
+        entities.extend(
+            (
+                ConsumptionSensor(coordinator, pod, "Consum activ"),
+                CurrentPowerSensor(coordinator, pod, "Putere activă"),
+                DailyLoadCurveSensor(coordinator, pod, "Consum zilnic (curbă)"),
+                HourlyLoadCurveSensor(coordinator, pod, "Consum ultima oră (curbă)"),
+            )
+        )
     async_add_entities(entities)

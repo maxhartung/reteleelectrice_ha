@@ -13,7 +13,7 @@ from urllib.parse import unquote, urljoin
 import aiohttp
 
 from .const import AURA_URL, BASE_URL, LOGIN_PAGE, VF_PAGE_MAP
-from .load_curve import LoadCurveDay, parse_load_curve_csv
+from .load_curve import LoadCurveMonth, parse_load_curve_response
 
 
 class PortalError(RuntimeError):
@@ -159,6 +159,8 @@ def _parse_vf_response(payload: str) -> Any:
         fragments = _json_fragments(block)
         if fragments:
             return fragments[0]
+        if "Zi;Frecventa;Marime" in block[:200]:
+            return html.unescape(block)
 
     fragments = _json_fragments(payload)
     if fragments:
@@ -444,16 +446,42 @@ class ReteleElectriceClient:
         await self._call_vf_ws("ReqMeterInstantData", params)
         return await self._call_vf_ws("FindOutMeterInstantData", params)
 
+    async def async_get_load_curve(
+        self,
+        pod_name: str,
+        year: int,
+        month: int,
+        energy_type: str = "WI",
+    ) -> LoadCurveMonth:
+        """Fetch one month's active-consumption curve.
+
+        ``WI`` is the portal's code for consumed active energy. The live
+        portal sends the POD, energy type, start date, and end date in this
+        order to ``CurveDiCaricoGraph``.
+        """
+        import calendar
+
+        if not 1 <= month <= 12:
+            raise PortalProtocolError(f"Invalid curve month: {month}")
+        last_day = calendar.monthrange(year, month)[1]
+        method_params = [
+            pod_name,
+            energy_type,
+            f"01/{month:02d}/{year} 00:00:00",
+            f"{last_day:02d}/{month:02d}/{year} 23:59:59",
+        ]
+        result = await self._call_vf_ws("CurveDiCaricoGraph", method_params)
+        try:
+            return parse_load_curve_response(result)
+        except ValueError as err:
+            raise PortalProtocolError("Load-curve response could not be parsed") from err
+
     async def async_get_load_curve_csv(
         self, method_params: list[str]
-    ) -> LoadCurveDay:
-        """Fetch and parse a CurveDiCaricoGraph export.
-
-        The portal's exact parameter ordering is intentionally supplied by the
-        caller until it is captured from a live request. This prevents the
-        integration from silently sending guessed date or energy-type values.
-        """
+    ) -> LoadCurveMonth:
+        """Compatibility wrapper for callers with captured portal parameters."""
         result = await self._call_vf_ws("CurveDiCaricoGraph", method_params)
-        if not isinstance(result, str):
-            raise PortalProtocolError("Load-curve endpoint did not return CSV text")
-        return parse_load_curve_csv(result)
+        try:
+            return parse_load_curve_response(result)
+        except ValueError as err:
+            raise PortalProtocolError("Load-curve response could not be parsed") from err

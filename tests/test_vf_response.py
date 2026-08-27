@@ -69,6 +69,12 @@ class VfResponseTests(unittest.TestCase):
         csv = "Zi;Frecventa;Marime;Q1\n26.08.2026;15;EA;0,123\n"
         self.assertEqual(parse(csv), csv)
 
+    def test_csv_inside_a4j_cdata_is_extracted(self) -> None:
+        parse = self._parser()
+        csv = "Zi;Frecventa;Marime;Q1\n26.08.2026;15;EA;0,123\n"
+        payload = f"<ajax-response><update><![CDATA[{csv}]]></update></ajax-response>"
+        self.assertEqual(parse(payload), csv)
+
 
 if __name__ == "__main__":
     unittest.main()

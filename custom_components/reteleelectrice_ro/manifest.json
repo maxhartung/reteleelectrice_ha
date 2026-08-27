@@ -3,10 +3,10 @@
   "name": "Rețele Electrice România",
   "codeowners": [],
   "config_flow": true,
-  "documentation": "https://github.com/your-user/reteleelectrice-homeassistant",
+  "documentation": "https://github.com/maxhartung/reteleelectrice_ha",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/your-user/reteleelectrice-homeassistant/issues",
+  "issue_tracker": "https://github.com/maxhartung/reteleelectrice_ha/issues",
   "requirements": [],
-  "version": "0.1.1"
+  "version": "0.2.0"
 }

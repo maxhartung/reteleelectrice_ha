@@ -9,6 +9,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import AuthenticationError, PortalError, ReteleElectriceClient
 from .const import CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DOMAIN
@@ -54,6 +55,7 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if isinstance(account_info, dict):
                 cnp = str(account_info.get("CNP__c") or account_info.get("Fiscal_Code__c") or "")
 
+            now = dt_util.now()
             for summary in pod_list:
                 pod_name = self._pod_name(summary)
                 if not pod_name:
@@ -67,6 +69,14 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     current["smart_meter_current"] = await self.client.async_get_smart_meter_current(pod_name, cnp)
                 except PortalError:
                     LOGGER.debug("Smart-meter current values unavailable for %s", pod_name, exc_info=True)
+                try:
+                    current["load_curve"] = await self.client.async_get_load_curve(
+                        pod_name,
+                        now.year,
+                        now.month,
+                    )
+                except PortalError:
+                    LOGGER.debug("Load curve unavailable for %s", pod_name, exc_info=True)
                 pod_data[pod_name] = current
 
             return {"account": account_info, "pods": pod_data}
