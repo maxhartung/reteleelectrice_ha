@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Rețele Electrice România",
+        "description": "Conectează contul tău de pe contulmeu.reteleelectrice.ro.",
+        "data": {
+          "email": "Email",
+          "password": "Parolă"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Emailul sau parola nu au fost acceptate.",
+      "cannot_connect": "Portalul nu a putut fi contactat."
+    },
+    "abort": {
+      "already_configured": "Acest cont este deja configurat."
+    }
+  }
+}
