@@ -98,6 +98,16 @@ def _submit_field(page: str) -> tuple[str, str] | None:
         attrs = _attributes(tag)
         if attrs.get("type", "").lower() in {"submit", "button"} and attrs.get("name"):
             return attrs["name"], attrs.get("value", "")
+
+    # Salesforce Visualforce can submit through an anchor and inject the
+    # submit field with jsfcljs() instead of rendering an input element.
+    match = re.search(
+        r"jsfcljs\([^,]+,\s*['\"]([^,'\"]+),([^'\"]*)['\"]",
+        page,
+        re.IGNORECASE,
+    )
+    if match:
+        return match.group(1), match.group(2)
     return None
 
 

@@ -43,6 +43,17 @@ class LoginFieldTests(unittest.TestCase):
         )
         self.assertEqual(submit, ("loginButton", "Login"))
 
+    def test_visualforce_javascript_submit_field_is_detected(self) -> None:
+        namespace = self._helpers()
+        submit = namespace["_submit_field"](
+            "function logincall() { jsfcljs(document.forms['loginPage:loginForm'],"
+            "'loginPage:loginForm:j_id25,loginPage:loginForm:j_id25',''); }"
+        )
+        self.assertEqual(
+            submit,
+            ("loginPage:loginForm:j_id25", "loginPage:loginForm:j_id25"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
