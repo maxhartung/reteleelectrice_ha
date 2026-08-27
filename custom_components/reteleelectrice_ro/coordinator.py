@@ -62,16 +62,16 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 account_info = await self.client.async_get_account_info()
             except AuthenticationError:
                 raise
-            except PortalError:
-                LOGGER.debug("Account metadata was unavailable", exc_info=True)
+            except PortalError as err:
+                LOGGER.warning("Account metadata was unavailable: %s", err)
 
             contact_info: Any = None
             try:
                 contact_info = await self.client.async_get_contact_info()
             except AuthenticationError:
                 raise
-            except PortalError:
-                LOGGER.debug("Contact metadata was unavailable", exc_info=True)
+            except PortalError as err:
+                LOGGER.warning("Contact metadata was unavailable: %s", err)
 
             cnp = ""
             if isinstance(account_info, dict):
@@ -93,8 +93,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     current["details"] = await self.client.async_get_pod_details(pod_name)
                 except AuthenticationError:
                     raise
-                except PortalError:
-                    LOGGER.debug("POD details unavailable for %s", pod_name, exc_info=True)
+                except PortalError as err:
+                    LOGGER.warning("POD details unavailable for %s: %s", pod_name, err)
 
                 try:
                     pod_reading_details[pod_name] = (
@@ -102,8 +102,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                 except AuthenticationError:
                     raise
-                except PortalError:
-                    LOGGER.debug("Reading metadata unavailable for %s", pod_name, exc_info=True)
+                except PortalError as err:
+                    LOGGER.warning("Reading metadata unavailable for %s: %s", pod_name, err)
 
                 try:
                     archive = await self.client.async_get_reading_archive(pod_name, cnp=cnp)
@@ -111,8 +111,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     current["reading_archive"] = archive
                 except AuthenticationError:
                     raise
-                except PortalError:
-                    LOGGER.debug("Reading archive unavailable for %s", pod_name, exc_info=True)
+                except PortalError as err:
+                    LOGGER.warning("Reading archive unavailable for %s: %s", pod_name, err)
 
                 try:
                     outage = await self.client.async_get_power_outages(pod_name)
@@ -120,8 +120,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     current["power_outages"] = outage
                 except AuthenticationError:
                     raise
-                except PortalError:
-                    LOGGER.debug("Power-outage data unavailable for %s", pod_name, exc_info=True)
+                except PortalError as err:
+                    LOGGER.warning("Power-outage data unavailable for %s: %s", pod_name, err)
 
                 if self._is_smart_meter(summary):
                     try:
@@ -132,8 +132,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         current["smart_meter"] = historical
                     except AuthenticationError:
                         raise
-                    except PortalError:
-                        LOGGER.debug("Smart-meter history unavailable for %s", pod_name, exc_info=True)
+                    except PortalError as err:
+                        LOGGER.warning("Smart-meter history unavailable for %s: %s", pod_name, err)
                     try:
                         instant = await self.client.async_get_instant_values(pod_name, cnp)
                         current["instant_values"] = instant
@@ -143,8 +143,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         instant_values[pod_name] = instant
                     except AuthenticationError:
                         raise
-                    except PortalError:
-                        LOGGER.debug("Instant smart-meter values unavailable for %s", pod_name, exc_info=True)
+                    except PortalError as err:
+                        LOGGER.warning("Instant smart-meter values unavailable for %s: %s", pod_name, err)
 
                 try:
                     supplier = await self.client.async_get_supplier_data(pod_name)
@@ -152,8 +152,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     current["supplier_data"] = supplier
                 except AuthenticationError:
                     raise
-                except PortalError:
-                    LOGGER.debug("Supplier data unavailable for %s", pod_name, exc_info=True)
+                except PortalError as err:
+                    LOGGER.warning("Supplier data unavailable for %s: %s", pod_name, err)
 
                 try:
                     current["load_curve"] = await self.client.async_get_load_curve(
@@ -163,8 +163,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                 except AuthenticationError:
                     raise
-                except PortalError:
-                    LOGGER.debug("Load curve unavailable for %s", pod_name, exc_info=True)
+                except PortalError as err:
+                    LOGGER.warning("Load curve unavailable for %s: %s", pod_name, err)
                 pod_data[pod_name] = current
 
             return {

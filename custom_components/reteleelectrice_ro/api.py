@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass
@@ -15,6 +16,11 @@ import aiohttp
 
 from .const import AURA_URL, BASE_URL, LOGIN_PAGE, VF_PAGE_MAP
 from .load_curve import LoadCurveMonth, parse_load_curve_response
+
+
+LOGGER = logging.getLogger(__name__)
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
+VF_TIMEOUT = aiohttp.ClientTimeout(total=60)
 
 
 class PortalError(RuntimeError):
@@ -36,6 +42,21 @@ class AuraBootstrap:
     fwuid: str
     app_uid: str
     token: str
+
+
+def _response_summary(value: Any) -> str:
+    """Describe a portal response without writing its contents to the log."""
+    if value is None:
+        return "null"
+    if isinstance(value, dict):
+        keys = sorted(str(key) for key in value)[:12]
+        suffix = ",..." if len(value) > len(keys) else ""
+        return f"object(keys={','.join(keys)}{suffix})"
+    if isinstance(value, list):
+        return f"array(length={len(value)})"
+    if isinstance(value, str):
+        return f"text(length={len(value)})"
+    return type(value).__name__
 
 
 def _attributes(tag: str) -> dict[str, str]:
@@ -62,7 +83,7 @@ def _form_fields(page: str) -> dict[str, str]:
     fields: dict[str, str] = {}
     for tag in re.findall(r"<input\b[^>]*>", page, re.IGNORECASE):
         attrs = _attributes(tag)
-        name = attrs.get("name")
+        name = attrs.get("name") or attrs.get("id")
         if name:
             fields[name] = attrs.get("value", "")
     return fields
@@ -236,7 +257,9 @@ class ReteleElectriceClient:
         session = await self._get_session()
         login_url = f"{LOGIN_PAGE}?startURL=%2Fs%2F&refURL={BASE_URL}%2Fs%2F"
 
-        async with session.get(login_url, allow_redirects=True) as response:
+        async with session.get(
+            login_url, allow_redirects=True, timeout=REQUEST_TIMEOUT
+        ) as response:
             if response.status != 200:
                 raise AuthenticationError(f"Login page returned HTTP {response.status}")
             login_html = await response.text()
@@ -263,6 +286,7 @@ class ReteleElectriceClient:
             data=fields,
             allow_redirects=False,
             headers={"Origin": BASE_URL, "Referer": login_page_url},
+            timeout=REQUEST_TIMEOUT,
         ) as response:
             post_html = await response.text()
             if response.status in (401, 403):
@@ -271,11 +295,17 @@ class ReteleElectriceClient:
 
         if not redirect:
             raise AuthenticationError("Portal login did not return a Salesforce redirect")
-        async with session.get(urljoin(BASE_URL, redirect), allow_redirects=True) as response:
+        async with session.get(
+            urljoin(BASE_URL, redirect),
+            allow_redirects=True,
+            timeout=REQUEST_TIMEOUT,
+        ) as response:
             if response.status >= 400:
                 raise AuthenticationError(f"Salesforce redirect returned HTTP {response.status}")
 
-        async with session.get(f"{BASE_URL}/s/", allow_redirects=True) as response:
+        async with session.get(
+            f"{BASE_URL}/s/", allow_redirects=True, timeout=REQUEST_TIMEOUT
+        ) as response:
             if response.status != 200:
                 raise AuthenticationError(f"Portal shell returned HTTP {response.status}")
             shell_html = await response.text()
@@ -356,7 +386,17 @@ class ReteleElectriceClient:
             "aura.token": self._bootstrap.token,
         }
 
-        async with session.post(AURA_URL, data=payload, headers={"Referer": f"{BASE_URL}/s/"}) as response:
+        async with session.post(
+            AURA_URL,
+            data=payload,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "*/*",
+                "Referer": f"{BASE_URL}/s/",
+                "Origin": BASE_URL,
+            },
+            timeout=REQUEST_TIMEOUT,
+        ) as response:
             if response.status in (401, 403):
                 self._logged_in = False
                 raise AuthenticationError("Aura session expired")
@@ -418,17 +458,29 @@ class ReteleElectriceClient:
         session = await self._get_session()
         page_url = f"{BASE_URL}/{page_name}"
 
-        async with session.get(page_url) as response:
+        async with session.get(
+            page_url, allow_redirects=True, timeout=REQUEST_TIMEOUT
+        ) as response:
             if response.status != 200:
                 raise PortalError(f"Visualforce page returned HTTP {response.status}")
             page_html = await response.text()
 
         fields = _form_fields(page_html)
         form_id, form_action = _form_details(page_html)
+        resolved_form_id = form_id or "j_id0:j_id2"
+        viewstate_fields = {
+            key: value
+            for key, value in fields.items()
+            if key.startswith("com.salesforce.visualforce.ViewState")
+        }
+        if "com.salesforce.visualforce.ViewState" not in viewstate_fields:
+            raise PortalProtocolError(
+                f"Visualforce page for {method_name} did not contain ViewState"
+            )
         fields.update(
             {
                 "AJAXREQUEST": "_viewRoot",
-                form_id or "j_id0:j_id2": form_id or "j_id0:j_id2",
+                resolved_form_id: resolved_form_id,
                 "methodN": method_name,
                 "params": ",".join(str(value) for value in method_params),
                 "uniqueId": f"script_{int(time.time())}",
@@ -437,17 +489,47 @@ class ReteleElectriceClient:
         action_match = re.search(
             r"similarityGroupingId['\"]\s*:\s*['\"]([^'\"]+)", page_html
         )
-        action_id = action_match.group(1) if action_match else f"{form_id}:j_id3"
+        action_id = action_match.group(1) if action_match else f"{resolved_form_id}:j_id3"
         fields[action_id] = action_id
         target = urljoin(page_url, form_action or f"/{page_name}")
 
-        async with session.post(target, data=fields, headers={"Referer": page_url}) as response:
+        async with session.post(
+            target,
+            data=fields,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Accept": "*/*",
+                "Referer": page_url,
+                "Origin": BASE_URL,
+            },
+            timeout=VF_TIMEOUT,
+        ) as response:
             if response.status in (401, 403):
                 self._logged_in = False
                 raise AuthenticationError("Visualforce session expired")
             if response.status != 200:
                 raise PortalError(f"Visualforce call returned HTTP {response.status}")
-            return _parse_vf_response(await response.text())
+            response_text = await response.text()
+
+        result = _parse_vf_response(response_text)
+        if isinstance(result, str):
+            stripped = result.strip()
+            if not stripped:
+                raise PortalProtocolError(
+                    f"Visualforce {method_name} returned an empty response"
+                )
+            if stripped.startswith("<") or "<ajax-response" in stripped.lower():
+                raise PortalProtocolError(
+                    f"Visualforce {method_name} returned unparsed markup "
+                    f"(length={len(response_text)})"
+                )
+        LOGGER.debug(
+            "Visualforce %s returned %s (response length=%d)",
+            method_name,
+            _response_summary(result),
+            len(response_text),
+        )
+        return result
 
     async def async_get_power_outages(self, pod_name: str) -> Any:
         return await self._call_vf_ws("PowerOutages", [pod_name, "RO"])
@@ -529,8 +611,24 @@ class ReteleElectriceClient:
         if isinstance(request_result, dict):
             status = str(request_result.get("Result") or request_result.get("status") or "")
             if "error" in status.lower():
+                LOGGER.warning(
+                    "Instant smart-meter request failed for %s at %s",
+                    pod_name,
+                    status,
+                )
                 return request_result
-        return await self._call_vf_ws("FindOutMeterInstantData", params)
+        data_result = await self._call_vf_ws("FindOutMeterInstantData", params)
+        if not (
+            isinstance(data_result, dict)
+            and isinstance(data_result.get("dataIstantValueList"), list)
+            and data_result["dataIstantValueList"]
+        ):
+            LOGGER.warning(
+                "Instant smart-meter response for %s contains no meter readings (%s)",
+                pod_name,
+                _response_summary(data_result),
+            )
+        return data_result
 
     async def async_get_supplier_data(self, pod_name: str) -> Any:
         """Return supplier and technical POD details from the portal."""
