@@ -54,6 +54,11 @@ class LoadCurveDay:
         distinguish a missing reading from a measured zero.
         """
         buckets: list[float | None] = [None] * 24
+        # The monthly graph endpoint can return one daily scalar instead of
+        # interval samples. It is useful for the daily sensor but must not be
+        # presented as the first hour of the day.
+        if self.frequency_minutes >= 1440:
+            return tuple(buckets)
         for index, value in enumerate(self.registers.get(register, ())):
             if value is None:
                 continue
@@ -381,6 +386,14 @@ def _structured_rows(value: Any, inherited_day: date | None = None) -> list[tupl
                 )
             )
 
+    # Some portal releases return one daily scalar in ``values``. Keep it as
+    # a daily total; it is not possible to derive an hourly bucket from it.
+    raw_daily_value = _first_value(value, ("values",))
+    if current_day is not None and not isinstance(raw_daily_value, (list, dict)):
+        daily_value = _numeric(raw_daily_value)
+        if daily_value is not None:
+            rows.append((current_day, 1440, register, [daily_value]))
+
     direct_values = _values_from_mapping(value)
     if direct_values is not None and current_day is not None:
         rows.append(
@@ -421,7 +434,8 @@ def _structured_rows(value: Any, inherited_day: date | None = None) -> list[tupl
             rows.extend(_structured_rows(nested, current_day))
 
     for key, nested in value.items():
-        if str(key).lower() in {
+        key_lower = str(key).lower()
+        if key_lower.endswith("_type_info") or key_lower in {
             "day", "date", "zi", "sampledate", "sample_date", "readingdate", "energytype", "register",
             "marime", "frequency", "frequencyminutes", "frecventa", "interval",
             "values", "readings", "samples", "hourlyvalues", "intervals", "curve", "data",

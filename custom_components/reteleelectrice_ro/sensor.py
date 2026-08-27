@@ -7,7 +7,13 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfEnergy, UnitOfPower
+from homeassistant.const import (
+    UnitOfApparentPower,
+    UnitOfElectricCurrent,
+    UnitOfElectricPotential,
+    UnitOfEnergy,
+    UnitOfPower,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -713,6 +719,118 @@ class CurrentPowerSensor(ReteleElectriceSensor):
         return _to_number(value)
 
 
+class InstantPhaseSensor(ReteleElectriceSensor):
+    """One phase value from the latest smart-meter instant reading."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(
+        self,
+        coordinator: ReteleElectriceCoordinator,
+        pod: str,
+        phase: str,
+        name: str,
+        field: str,
+        key: str,
+    ) -> None:
+        super().__init__(coordinator, pod, name)
+        self._phase = phase
+        self._field = field
+        self._attr_unique_id = f"{DOMAIN}_{pod.lower()}_{key}_{phase.lower()}"
+
+    @property
+    def native_value(self) -> float | None:
+        return _to_number(_instant_row(self._instant_data).get(self._field))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attributes = super().extra_state_attributes
+        row = _instant_row(self._instant_data)
+        for label, key in (
+            ("Data citire", "READING_DATE"),
+            ("Ultima actualizare", "LAST_UPDATED"),
+            ("Contor", "METER"),
+        ):
+            if row.get(key) not in (None, ""):
+                attributes[label] = row[key]
+        return attributes
+
+
+class PhaseVoltageSensor(InstantPhaseSensor):
+    """Latest RMS voltage reported for phase R."""
+
+    _attr_device_class = SensorDeviceClass.VOLTAGE
+    _attr_native_unit_of_measurement = UnitOfElectricPotential.VOLT
+
+    def __init__(self, coordinator: ReteleElectriceCoordinator, pod: str, phase: str) -> None:
+        super().__init__(
+            coordinator,
+            pod,
+            phase,
+            f"Tensiune faza {phase}",
+            f"U{phase}_VALUE",
+            "tensiune_faza",
+        )
+
+
+class PhaseCurrentSensor(InstantPhaseSensor):
+    """Latest RMS current reported for phase R."""
+
+    _attr_device_class = SensorDeviceClass.CURRENT
+    _attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
+
+    def __init__(self, coordinator: ReteleElectriceCoordinator, pod: str, phase: str) -> None:
+        super().__init__(
+            coordinator,
+            pod,
+            phase,
+            f"Curent faza {phase}",
+            f"I{phase}_VALUE",
+            "curent_faza",
+        )
+
+
+class ApparentPowerSensor(ReteleElectriceSensor):
+    """Apparent power estimated from the reported phase voltage and current."""
+
+    _attr_device_class = SensorDeviceClass.APPARENT_POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfApparentPower.KILO_VOLT_AMPERE
+
+    def __init__(self, coordinator: ReteleElectriceCoordinator, pod: str) -> None:
+        super().__init__(coordinator, pod, "Putere aparentă (V×A)")
+        self._attr_unique_id = f"{DOMAIN}_{pod.lower()}_putere_aparenta"
+
+    @property
+    def native_value(self) -> float | None:
+        total = 0.0
+        found = False
+        row = _instant_row(self._instant_data)
+        for phase in ("R", "S", "T"):
+            voltage = _to_number(row.get(f"U{phase}_VALUE"))
+            current = _to_number(row.get(f"I{phase}_VALUE"))
+            if voltage is None or current is None:
+                continue
+            total += abs(voltage * current) / 1000
+            found = True
+        return round(total, 3) if found else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attributes = super().extra_state_attributes
+        row = _instant_row(self._instant_data)
+        phases: dict[str, float] = {}
+        for phase in ("R", "S", "T"):
+            voltage = _to_number(row.get(f"U{phase}_VALUE"))
+            current = _to_number(row.get(f"I{phase}_VALUE"))
+            if voltage is not None and current is not None:
+                phases[phase] = round(abs(voltage * current) / 1000, 3)
+        if phases:
+            attributes["Putere aparentă pe faze (kVA)"] = phases
+            attributes["Notă"] = "V×A; nu este putere activă fără factorul de putere"
+        return attributes
+
+
 class LoadCurveSensor(ReteleElectriceSensor):
     """Base class for values derived from the monthly load curve."""
 
@@ -879,6 +997,9 @@ async def async_setup_entry(
                         "Valoare instantanee consum",
                         "valoare_instantanee_consum",
                     ),
+                    PhaseVoltageSensor(coordinator, pod, "R"),
+                    PhaseCurrentSensor(coordinator, pod, "R"),
+                    ApparentPowerSensor(coordinator, pod),
                 )
             )
             if is_prosumer:

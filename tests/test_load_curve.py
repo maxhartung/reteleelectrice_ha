@@ -77,6 +77,27 @@ class LoadCurveTests(unittest.TestCase):
         self.assertEqual(month.latest_day.frequency_minutes, 60)
         self.assertEqual(month.latest_day.hourly_totals(), (0.5, 0.6, 0.7, *([None] * 21)))
 
+    def test_portal_daily_scalar_does_not_read_type_metadata_as_data(self) -> None:
+        month = parse_load_curve_response(
+            [
+                {
+                    "values": "9,760000",
+                    "sampleDate": "24/08/2026 00:00",
+                    "energyType": "WI",
+                    "values_type_info": ["values", "metadata"],
+                },
+                {
+                    "values": "12,333000",
+                    "sampleDate": "26/08/2026 00:00",
+                    "energyType": "WI",
+                    "values_type_info": ["values", "metadata"],
+                },
+            ]
+        )
+        self.assertEqual(month.daily_totals(), {"2026-08-24": 9.76, "2026-08-26": 12.333})
+        self.assertEqual(month.latest_day.frequency_minutes, 1440)
+        self.assertEqual(month.latest_day.hourly_totals(), (None,) * 24)
+
     def test_portal_hourly_csv_is_supported(self) -> None:
         csv = (
             "Zi;00:00 - 01:00;01:00 - 02:00;23:00 - 00:00\n"

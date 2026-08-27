@@ -10,7 +10,8 @@ This project is in early development. It connects directly to the user's portal 
 - POD discovery and meter metadata.
 - Current smart-meter values.
 - Separate cumulative instant-consumption/production entities, phase voltage
-  and current attributes, and active-power data when the portal supplies it.
+  and current sensors, apparent power calculated as V×A, and active-power data
+  when the portal supplies it.
 - Monthly load-curve data at the portal's available granularity (currently
   15-minute data for smart meters), aggregated into hourly and daily values.
 - Reading-archive indexes, annual totals, interruption status, smart-meter
@@ -26,6 +27,14 @@ For each POD with curve data, the integration also creates:
 Both sensors include `daily_consumption` and `hourly_consumption` attributes so
 the values can be used in dashboards and automations. The portal may publish
 curve data with a delay, so the latest day is not necessarily today.
+
+The smart-meter refresh also exposes the latest phase-R voltage and current
+as sensors, plus `Putere aparentă (V×A)` in kVA. The portal may report
+voltage/current while leaving active power (`P_VALUE`) empty. V×A is apparent
+power, not active power, so it must not be used as kW/kWh without a power
+factor. Home Assistant's Recorder stores the sensor history automatically when
+Recorder is enabled; the cumulative instant-consumption sensor is the correct
+source for the Energy dashboard.
 
 ## Instant-meter refresh automation
 

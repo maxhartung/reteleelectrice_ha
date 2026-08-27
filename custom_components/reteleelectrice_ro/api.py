@@ -763,17 +763,12 @@ class ReteleElectriceClient:
             energy_type,
             f"01/{month:02d}/{year} 00:00:00",
             f"{last_day:02d}/{month:02d}/{year} 23:59:59",
+            "",
         ]
-        try:
-            result = await self._call_vf_ws("CurveDiCaricoGraph", method_params)
-        except PortalError as first_error:
-            # Some older portal releases use EA for the same curve. Try it
-            # once when the current UI-compatible WI request is rejected.
-            if energy_type != "EA" and "HTTP 500" in str(first_error):
-                method_params[1] = "EA"
-                result = await self._call_vf_ws("CurveDiCaricoGraph", method_params)
-            else:
-                raise
+        # The current portal UI uses WI for consumed active energy and sends a
+        # fifth, empty argument. The server indexes that placeholder even
+        # though it is not displayed in the browser's console input log.
+        result = await self._call_vf_ws("CurveDiCaricoGraph", method_params)
         try:
             return parse_load_curve_response(result)
         except ValueError as err:
@@ -783,7 +778,10 @@ class ReteleElectriceClient:
         self, method_params: list[str]
     ) -> LoadCurveMonth:
         """Compatibility wrapper for callers with captured portal parameters."""
-        result = await self._call_vf_ws("CurveDiCaricoGraph", method_params)
+        curve_params = list(method_params)
+        if len(curve_params) == 4:
+            curve_params.append("")
+        result = await self._call_vf_ws("CurveDiCaricoGraph", curve_params)
         try:
             return parse_load_curve_response(result)
         except ValueError as err:
