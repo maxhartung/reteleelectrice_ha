@@ -171,31 +171,52 @@ def _json_fragments(payload: str) -> list[Any]:
     return fragments
 
 
-def _contains_portal_fields(value: Any) -> bool:
-    """Return whether a JSON fragment resembles a portal data result."""
-    marker_names = {
-        "dataIstantValueList",
-        "energyReadingList",
-        "ENERGY_TYPE",
-        "P_VALUE",
-        "sampleDate",
-        "XML_Readings",
-        "measureDate",
-        "Result",
-        "status",
-        "Frecventa",
-        "PowerOutages",
-        "outage",
-        "POD",
-        "POD__c",
+def _portal_fragment_score(value: Any) -> int:
+    """Score a JSON fragment by how strongly it resembles portal data."""
+    field_weights = {
+        "dataIstantValueList": 100,
+        "energyReadingList": 80,
+        "XML_Readings": 80,
+        "sampleDate": 60,
+        "P_VALUE": 50,
+        "SUM_EA": 50,
+        "SUM_EAP": 50,
+        "checkInterruzione": 50,
+        "messaggio": 40,
+        "measureDate": 40,
+        "ENERGY_TYPE": 40,
+        "typeofenergy_measured": 40,
+        "row": 30,
+        "rows": 30,
+        "meter": 20,
+        "meters": 20,
+        "Frecventa": 20,
+        "POD": 20,
+        "POD__c": 20,
+        "Result": 1,
+        "status": 1,
+        "PowerOutages": 1,
+        "outage": 1,
     }
     if isinstance(value, dict):
-        if any(str(key) in marker_names for key in value):
-            return True
-        return any(_contains_portal_fields(child) for child in value.values())
+        return sum(
+            field_weights.get(str(key), 0) + _portal_fragment_score(child)
+            for key, child in value.items()
+        )
     if isinstance(value, list):
-        return any(_contains_portal_fields(child) for child in value)
-    return False
+        return sum(_portal_fragment_score(child) for child in value)
+    return 0
+
+
+def _contains_portal_fields(value: Any) -> bool:
+    """Return whether a JSON fragment resembles a portal data result."""
+    return _portal_fragment_score(value) > 0
+
+
+def _best_portal_fragment(fragments: list[Any]) -> Any | None:
+    """Select the most data-rich portal fragment from an A4J response."""
+    candidates = [fragment for fragment in fragments if _contains_portal_fields(fragment)]
+    return max(candidates, key=_portal_fragment_score, default=None)
 
 
 def _parse_vf_response(payload: str) -> Any:
@@ -209,18 +230,18 @@ def _parse_vf_response(payload: str) -> Any:
     cdata_blocks = re.findall(r"<!\[CDATA\[(.*?)\]\]>", payload, re.DOTALL)
     for block in cdata_blocks:
         fragments = _json_fragments(block)
-        for fragment in fragments:
-            if _contains_portal_fields(fragment):
-                return fragment
+        best_fragment = _best_portal_fragment(fragments)
+        if best_fragment is not None:
+            return best_fragment
         if "Zi;Frecventa;Marime" in block[:200]:
             return html.unescape(block)
 
     # The surrounding Visualforce document contains unrelated JavaScript JSON
     # objects. Only accept a fragment with fields known from portal results;
     # otherwise the wrapper itself can be mistaken for meter data.
-    for fragment in _json_fragments(payload):
-        if _contains_portal_fields(fragment):
-            return fragment
+    best_fragment = _best_portal_fragment(_json_fragments(payload))
+    if best_fragment is not None:
+        return best_fragment
 
     # Some proxy methods return useful values as updated input elements rather
     # than JSON. Exclude the framework state fields from that fallback.
@@ -618,7 +639,9 @@ class ReteleElectriceClient:
         if not start_date:
             start_date = (now - timedelta(days=90)).strftime("%d/%m/%Y 00:00:00")
         if not end_date:
-            end_date = now.strftime("%d/%m/%Y 23:59:59")
+            # Match the reference integration and the portal's date-range
+            # convention: the end date is the start of the current day.
+            end_date = now.strftime("%d/%m/%Y 00:00:00")
         return await self._call_vf_ws(
             "FindOutMeterHistoryData",
             [cnp, "", pod_name, start_date, end_date],
@@ -688,7 +711,7 @@ class ReteleElectriceClient:
         pod_name: str,
         year: int,
         month: int,
-        energy_type: str = "WI",
+        energy_type: str = "EA",
     ) -> LoadCurveMonth:
         """Fetch one month's active-consumption curve.
 
@@ -707,7 +730,17 @@ class ReteleElectriceClient:
             f"01/{month:02d}/{year} 00:00:00",
             f"{last_day:02d}/{month:02d}/{year} 23:59:59",
         ]
-        result = await self._call_vf_ws("CurveDiCaricoGraph", method_params)
+        try:
+            result = await self._call_vf_ws("CurveDiCaricoGraph", method_params)
+        except PortalError as first_error:
+            # Some portal releases use WI for the same curve while the CSV
+            # export and current UI use the EA register. Try the legacy code
+            # once when the preferred code is rejected by the backend.
+            if energy_type != "WI" and "HTTP 500" in str(first_error):
+                method_params[1] = "WI"
+                result = await self._call_vf_ws("CurveDiCaricoGraph", method_params)
+            else:
+                raise
         try:
             return parse_load_curve_response(result)
         except ValueError as err:

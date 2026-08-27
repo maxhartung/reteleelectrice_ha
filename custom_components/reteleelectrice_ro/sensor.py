@@ -125,8 +125,18 @@ def _rows(value: Any, keys: tuple[str, ...] = ("row", "rows", "XML_Readings", "r
                 return [nested]
             if isinstance(nested, list):
                 return [item for item in nested if isinstance(item, dict)]
+        for child in value.values():
+            nested = _rows(child, keys)
+            if nested:
+                return nested
     if isinstance(value, list):
-        return [item for item in value if isinstance(item, dict)]
+        rows = [item for item in value if isinstance(item, dict)]
+        if rows:
+            return rows
+        for child in value:
+            nested = _rows(child, keys)
+            if nested:
+                return nested
     return []
 
 
@@ -346,7 +356,14 @@ class ReadingIndexSensor(ReteleElectriceSensor):
     @property
     def native_value(self) -> float | None:
         readings = _archive_readings(self.coordinator, self._pod)
-        return _get_energy_value(readings[0].get("meter", []), self._register) if readings else None
+        value = _get_energy_value(readings[0].get("meter", []), self._register) if readings else None
+        if value in (None, 0) and self._register == "EA":
+            # The archive sometimes publishes a zero placeholder while the
+            # instant smart-meter result already contains the current index.
+            instant_value = _to_number(_register_value(self._instant_data, "EA"))
+            if instant_value is not None and instant_value > 0:
+                return instant_value
+        return value
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -409,7 +426,11 @@ class ArchiveEnergySensor(ReteleElectriceSensor):
         oldest = _get_energy_value(readings[-1].get("meter", []), self._register)
         if latest is None:
             return None
-        return round(latest - oldest, 3) if oldest is not None and len(readings) > 1 else latest
+        if oldest is not None and len(readings) > 1:
+            # A corrected/reset portal index must not become negative energy
+            # in Home Assistant's statistics.
+            return max(0.0, round(latest - oldest, 3))
+        return latest
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -440,24 +461,29 @@ class OutageSensor(ReteleElectriceSensor):
         data = _data_map(self.coordinator, "power_outages").get(self._pod)
         if not isinstance(data, dict):
             return "Fără date"
-        nested = data.get("data")
-        if isinstance(nested, dict):
-            status = str(nested.get("checkInterruzione", "")).lower()
-            if status == "true":
-                return "Fără întreruperi"
-            if status == "false":
-                return "Întrerupere activă"
-        return str(data.get("esito") or "Necunoscut")
+        status = str(
+            _walk_values(data, ("checkInterruzione", "checkInterruption")) or ""
+        ).lower()
+        if status == "true":
+            return "Fără întreruperi"
+        if status == "false":
+            return "Întrerupere activă"
+        return str(
+            _walk_values(data, ("esito", "Esito", "result", "Result", "status"))
+            or "Necunoscut"
+        )
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         attributes = super().extra_state_attributes
         data = _data_map(self.coordinator, "power_outages").get(self._pod)
-        if isinstance(data, dict) and isinstance(data.get("data"), dict):
-            nested = data["data"]
-            if nested.get("messaggio"):
-                attributes["Mesaj"] = nested["messaggio"]
-            attributes["Verificare întreruperi"] = nested.get("checkInterruzione", "")
+        if isinstance(data, dict):
+            message = _walk_values(data, ("messaggio", "message"))
+            if message:
+                attributes["Mesaj"] = message
+            attributes["Verificare întreruperi"] = _walk_values(
+                data, ("checkInterruzione", "checkInterruption")
+            ) or ""
         return attributes
 
 
@@ -567,7 +593,20 @@ class SupplierDataSensor(ReteleElectriceSensor):
     @property
     def native_value(self) -> str:
         data = _data_map(self.coordinator, "supplier_data").get(self._pod)
-        value = _walk_values(data, ("Supplier", "supplier", "Supplier_Name", "Name"))
+        value = _walk_values(
+            data,
+            (
+                "cui",
+                "CUI",
+                "CUI__c",
+                "Supplier",
+                "supplier",
+                "Supplier_Name",
+                "supplier_name",
+                "furnizor",
+                "Name",
+            ),
+        )
         return str(value or "Fără date")
 
     @property

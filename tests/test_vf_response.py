@@ -15,7 +15,9 @@ class VfResponseTests(unittest.TestCase):
             "_attributes",
             "_json_or_text",
             "_json_fragments",
+            "_portal_fragment_score",
             "_contains_portal_fields",
+            "_best_portal_fragment",
             "_parse_vf_response",
         }
         nodes = [
@@ -92,6 +94,20 @@ class VfResponseTests(unittest.TestCase):
         self.assertEqual(
             parse(payload),
             {"dataIstantValueList": [{"P_VALUE": "0,123"}]},
+        )
+
+    def test_data_fragment_wins_over_result_status_wrapper(self) -> None:
+        parse = self._parser()
+        payload = (
+            "<ajax-response><update><![CDATA["
+            '{"Result":"OK"}'
+            " "
+            '{"Result":"OK","row":[{"SUM_EA":"12,5"}]}'
+            "]]></update></ajax-response>"
+        )
+        self.assertEqual(
+            parse(payload),
+            {"Result": "OK", "row": [{"SUM_EA": "12,5"}]},
         )
 
 
