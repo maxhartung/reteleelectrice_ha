@@ -8,6 +8,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -34,10 +35,21 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hass,
             logger=LOGGER,
             name=DOMAIN,
+            config_entry=entry,
             update_interval=timedelta(seconds=int(interval)),
+            always_update=False,
         )
         self.entry = entry
         self.client = client
+
+    async def _async_setup(self) -> None:
+        """Authenticate once before the first coordinated data refresh."""
+        try:
+            await self.client.async_login()
+        except AuthenticationError as err:
+            raise ConfigEntryAuthFailed("Authentication failed") from err
+        except PortalError as err:
+            raise UpdateFailed(str(err)) from err
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
@@ -48,12 +60,16 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             account_info: Any = None
             try:
                 account_info = await self.client.async_get_account_info()
+            except AuthenticationError:
+                raise
             except PortalError:
                 LOGGER.debug("Account metadata was unavailable", exc_info=True)
 
             contact_info: Any = None
             try:
                 contact_info = await self.client.async_get_contact_info()
+            except AuthenticationError:
+                raise
             except PortalError:
                 LOGGER.debug("Contact metadata was unavailable", exc_info=True)
 
@@ -75,6 +91,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 current: dict[str, Any] = {"summary": summary}
                 try:
                     current["details"] = await self.client.async_get_pod_details(pod_name)
+                except AuthenticationError:
+                    raise
                 except PortalError:
                     LOGGER.debug("POD details unavailable for %s", pod_name, exc_info=True)
 
@@ -82,6 +100,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     pod_reading_details[pod_name] = (
                         await self.client.async_get_reading_archive_pod_details(pod_name)
                     )
+                except AuthenticationError:
+                    raise
                 except PortalError:
                     LOGGER.debug("Reading metadata unavailable for %s", pod_name, exc_info=True)
 
@@ -89,6 +109,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     archive = await self.client.async_get_reading_archive(pod_name, cnp=cnp)
                     reading_archive[pod_name] = archive
                     current["reading_archive"] = archive
+                except AuthenticationError:
+                    raise
                 except PortalError:
                     LOGGER.debug("Reading archive unavailable for %s", pod_name, exc_info=True)
 
@@ -96,6 +118,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     outage = await self.client.async_get_power_outages(pod_name)
                     power_outages[pod_name] = outage
                     current["power_outages"] = outage
+                except AuthenticationError:
+                    raise
                 except PortalError:
                     LOGGER.debug("Power-outage data unavailable for %s", pod_name, exc_info=True)
 
@@ -106,6 +130,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         )
                         smart_meter[pod_name] = historical
                         current["smart_meter"] = historical
+                    except AuthenticationError:
+                        raise
                     except PortalError:
                         LOGGER.debug("Smart-meter history unavailable for %s", pod_name, exc_info=True)
                     try:
@@ -115,6 +141,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         # entities and callers.
                         current["smart_meter_current"] = instant
                         instant_values[pod_name] = instant
+                    except AuthenticationError:
+                        raise
                     except PortalError:
                         LOGGER.debug("Instant smart-meter values unavailable for %s", pod_name, exc_info=True)
 
@@ -122,6 +150,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     supplier = await self.client.async_get_supplier_data(pod_name)
                     supplier_data[pod_name] = supplier
                     current["supplier_data"] = supplier
+                except AuthenticationError:
+                    raise
                 except PortalError:
                     LOGGER.debug("Supplier data unavailable for %s", pod_name, exc_info=True)
 
@@ -131,6 +161,8 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         now.year,
                         now.month,
                     )
+                except AuthenticationError:
+                    raise
                 except PortalError:
                     LOGGER.debug("Load curve unavailable for %s", pod_name, exc_info=True)
                 pod_data[pod_name] = current
@@ -148,7 +180,7 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "supplier_data": supplier_data,
             }
         except AuthenticationError as err:
-            raise UpdateFailed("Authentication expired") from err
+            raise ConfigEntryAuthFailed("Authentication expired") from err
         except PortalError as err:
             raise UpdateFailed(str(err)) from err
 

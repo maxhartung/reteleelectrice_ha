@@ -35,9 +35,10 @@ POD. Pressing it runs the portal's two-step `ReqMeterInstantData` and
 
 Example automations are in
 [`examples/instant_refresh_automations.yaml`](examples/instant_refresh_automations.yaml).
-Use the 15-minute or hourly schedule, not both at the same time. The portal can
-limit how often instant values may be requested; if refreshes begin returning
-errors, switch to the hourly schedule.
+Replace the example button ID with the ID shown in Home Assistant, then use the
+15-minute or hourly schedule, not both at the same time. The portal can limit
+how often instant values may be requested; if refreshes begin returning errors,
+switch to the hourly schedule.
 
 The portal is a private cloud service with an undocumented interface. Requests are deliberately conservative and the implementation must tolerate portal changes.
 

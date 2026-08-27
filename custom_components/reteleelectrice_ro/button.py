@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-import logging
-
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .api import AuthenticationError, PortalError
 from .const import DOMAIN
 from .coordinator import ReteleElectriceCoordinator
-from .api import PortalError
 
 
-LOGGER = logging.getLogger(__name__)
+PARALLEL_UPDATES = 0
 
 
 class RefreshButton(CoordinatorEntity[ReteleElectriceCoordinator], ButtonEntity):
@@ -48,22 +47,11 @@ class InstantRefreshButton(CoordinatorEntity[ReteleElectriceCoordinator], Button
         super().__init__(coordinator)
         self._pod = pod
         self._attr_unique_id = f"{DOMAIN}_{pod.lower()}_actualizare_instantanee"
-        self._custom_entity_id = (
-            f"button.{DOMAIN}_{pod.lower()}_actualizare_instantanee"
-        )
         self._attr_device_info = {
             "identifiers": {(DOMAIN, pod)},
             "name": f"Rețele Electrice {pod}",
             "manufacturer": "Rețele Electrice România",
         }
-
-    @property
-    def entity_id(self) -> str | None:
-        return self._custom_entity_id
-
-    @entity_id.setter
-    def entity_id(self, value: str) -> None:
-        self._custom_entity_id = value
 
     @property
     def extra_state_attributes(self) -> dict[str, str]:
@@ -72,8 +60,15 @@ class InstantRefreshButton(CoordinatorEntity[ReteleElectriceCoordinator], Button
     async def async_press(self) -> None:
         try:
             await self.coordinator.async_request_instant_refresh(self._pod)
-        except PortalError:
-            LOGGER.error("Instant smart-meter refresh failed for %s", self._pod, exc_info=True)
+        except AuthenticationError as err:
+            self.coordinator.entry.async_start_reauth(self.hass)
+            raise HomeAssistantError(
+                "Authentication expired; Home Assistant started reauthentication"
+            ) from err
+        except PortalError as err:
+            raise HomeAssistantError(
+                f"Instant smart-meter refresh failed for {self._pod}"
+            ) from err
 
 
 async def async_setup_entry(

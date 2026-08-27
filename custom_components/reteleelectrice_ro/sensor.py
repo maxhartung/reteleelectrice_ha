@@ -17,6 +17,9 @@ from .coordinator import ReteleElectriceCoordinator
 from .load_curve import LoadCurveDay, LoadCurveMonth
 
 
+PARALLEL_UPDATES = 0
+
+
 def _walk_values(value: Any, keys: tuple[str, ...]) -> Any:
     if isinstance(value, dict):
         for key in keys:
@@ -698,6 +701,8 @@ class LoadCurveSensor(ReteleElectriceSensor):
 class DailyLoadCurveSensor(LoadCurveSensor):
     """Total active consumption for the latest day supplied by the portal."""
 
+    _attr_state_class = SensorStateClass.TOTAL
+
     @property
     def native_value(self) -> float | None:
         latest_day = self._latest_day
@@ -706,6 +711,8 @@ class DailyLoadCurveSensor(LoadCurveSensor):
 
 class HourlyLoadCurveSensor(LoadCurveSensor):
     """The latest available one-hour active-consumption bucket."""
+
+    _attr_state_class = SensorStateClass.TOTAL
 
     @property
     def native_value(self) -> float | None:

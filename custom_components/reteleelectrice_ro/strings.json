@@ -8,6 +8,13 @@
           "email": "Email",
           "password": "Parolă"
         }
+      },
+      "reauth_confirm": {
+        "title": "Reautentificare Rețele Electrice România",
+        "description": "Parola contului nu mai este acceptată. Introdu parola actuală pentru a reconecta integrarea.",
+        "data": {
+          "password": "Parolă"
+        }
       }
     },
     "error": {

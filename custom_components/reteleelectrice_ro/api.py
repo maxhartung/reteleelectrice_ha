@@ -226,6 +226,8 @@ class ReteleElectriceClient:
         return self._session
 
     async def async_close(self) -> None:
+        self._logged_in = False
+        self._bootstrap = None
         if self._owns_session and self._session is not None and not self._session.closed:
             await self._session.close()
 
