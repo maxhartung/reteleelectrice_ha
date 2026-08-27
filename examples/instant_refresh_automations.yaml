@@ -1,0 +1,26 @@
+# Replace the entity ID below with the one shown for your POD in Home
+# Assistant. The integration creates one "Actualizare valori instantanee"
+# button per POD.
+
+# Recommended when the portal accepts frequent requests:
+- alias: "Actualizare valori instantanee la 15 minute"
+  description: "Actualizare frecventă pentru monitorizare în timp real"
+  trigger:
+    - platform: time_pattern
+      minutes: "/15"
+  action:
+    - service: button.press
+      target:
+        entity_id: button.reteleelectrice_ro001eXXXXXXXXX_actualizare_valori_instantanee
+
+# Alternative: use this instead of the 15-minute automation if the portal
+# starts rejecting frequent instant-meter requests.
+# - alias: "Actualizare valori instantanee la fiecare oră"
+#   description: "Apasă butonul pentru a trage datele live de pe contor"
+#   trigger:
+#     - platform: time_pattern
+#       minutes: "/60"
+#   action:
+#     - service: button.press
+#       target:
+#         entity_id: button.reteleelectrice_ro001eXXXXXXXXX_actualizare_valori_instantanee

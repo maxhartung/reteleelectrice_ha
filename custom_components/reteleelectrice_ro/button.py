@@ -31,7 +31,33 @@ class RefreshButton(CoordinatorEntity[ReteleElectriceCoordinator], ButtonEntity)
         await self.coordinator.async_request_refresh()
 
 
+class InstantRefreshButton(CoordinatorEntity[ReteleElectriceCoordinator], ButtonEntity):
+    """Request fresh smart-meter values for one POD."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Actualizare valori instantanee"
+
+    def __init__(self, coordinator: ReteleElectriceCoordinator, pod: str) -> None:
+        super().__init__(coordinator)
+        self._pod = pod
+        self._attr_unique_id = f"{pod}_instant_refresh"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, pod)},
+            "name": f"Rețele Electrice {pod}",
+            "manufacturer": "Rețele Electrice România",
+        }
+
+    async def async_press(self) -> None:
+        await self.coordinator.async_request_instant_refresh(self._pod)
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    async_add_entities([RefreshButton(entry.runtime_data.coordinator)])
+    coordinator = entry.runtime_data.coordinator
+    pods = (coordinator.data or {}).get("pods", {})
+    pod_names = [str(name) for name in pods] if isinstance(pods, dict) else []
+    async_add_entities(
+        [RefreshButton(coordinator)]
+        + [InstantRefreshButton(coordinator, pod) for pod in pod_names]
+    )

@@ -85,6 +85,32 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except PortalError as err:
             raise UpdateFailed(str(err)) from err
 
+    async def async_request_instant_refresh(self, pod_name: str) -> None:
+        """Run the portal's two-step smart-meter refresh for one POD."""
+        data = self.data
+        if not isinstance(data, dict):
+            await self.async_request_refresh()
+            data = self.data
+        if not isinstance(data, dict):
+            raise UpdateFailed("No coordinator data is available")
+
+        account_info = data.get("account")
+        cnp = ""
+        if isinstance(account_info, dict):
+            cnp = str(account_info.get("CNP__c") or account_info.get("Fiscal_Code__c") or "")
+        instant_values = await self.client.async_get_instant_values(pod_name, cnp)
+
+        pods = data.get("pods")
+        if not isinstance(pods, dict) or pod_name not in pods:
+            return
+        updated_data = dict(data)
+        updated_pods = dict(pods)
+        updated_pod = dict(updated_pods[pod_name])
+        updated_pod["smart_meter_current"] = instant_values
+        updated_pods[pod_name] = updated_pod
+        updated_data["pods"] = updated_pods
+        self.async_set_updated_data(updated_data)
+
     @staticmethod
     def _normalise_pods(raw_pods: Any) -> list[dict[str, Any]]:
         if isinstance(raw_pods, list):

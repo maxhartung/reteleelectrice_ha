@@ -23,6 +23,18 @@ Both sensors include `daily_consumption` and `hourly_consumption` attributes so
 the values can be used in dashboards and automations. The portal may publish
 curve data with a delay, so the latest day is not necessarily today.
 
+## Instant-meter refresh automation
+
+The integration creates an `Actualizare valori instantanee` button for every
+POD. Pressing it runs the portal's two-step `ReqMeterInstantData` and
+`FindOutMeterInstantData` workflow, then updates the smart-meter entities.
+
+Example automations are in
+[`examples/instant_refresh_automations.yaml`](examples/instant_refresh_automations.yaml).
+Use the 15-minute or hourly schedule, not both at the same time. The portal can
+limit how often instant values may be requested; if refreshes begin returning
+errors, switch to the hourly schedule.
+
 The portal is a private cloud service with an undocumented interface. Requests are deliberately conservative and the implementation must tolerate portal changes.
 
 ## Development
