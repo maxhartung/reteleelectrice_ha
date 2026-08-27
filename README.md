@@ -36,6 +36,11 @@ factor. Home Assistant's Recorder stores the sensor history automatically when
 Recorder is enabled; the cumulative instant-consumption sensor is the correct
 source for the Energy dashboard.
 
+After two different smart-meter readings, `Putere activă medie` is calculated
+from the meter's cumulative `Energia Activă 1.8.0` register as `ΔkWh / hours`.
+It represents the average active power between those meter timestamps, not an
+instantaneous wattage reading.
+
 ## Instant-meter refresh automation
 
 The integration creates an `Actualizare valori instantanee` button for every

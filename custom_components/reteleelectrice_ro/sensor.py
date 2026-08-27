@@ -831,6 +831,38 @@ class ApparentPowerSensor(ReteleElectriceSensor):
         return attributes
 
 
+class AverageActivePowerSensor(ReteleElectriceSensor):
+    """Average active power calculated from two 1.8.0 meter readings."""
+
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+
+    def __init__(self, coordinator: ReteleElectriceCoordinator, pod: str) -> None:
+        super().__init__(coordinator, pod, "Putere activă medie")
+        self._attr_unique_id = f"{DOMAIN}_{pod.lower()}_putere_activa_medie"
+
+    @property
+    def native_value(self) -> float | None:
+        value = self._pod_data
+        if not isinstance(value, dict):
+            return None
+        average_power = value.get("average_active_power")
+        return float(average_power) if isinstance(average_power, (int, float)) else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attributes = super().extra_state_attributes
+        attributes.update(
+            {
+                "Sursă": "Energia Activă 1.8.0",
+                "Calcul": "(index nou - index anterior) / ore între citiri",
+                "Notă": "Medie între două citiri ale contorului, nu putere instantanee",
+            }
+        )
+        return attributes
+
+
 class LoadCurveSensor(ReteleElectriceSensor):
     """Base class for values derived from the monthly load curve."""
 
@@ -1000,6 +1032,7 @@ async def async_setup_entry(
                     PhaseVoltageSensor(coordinator, pod, "R"),
                     PhaseCurrentSensor(coordinator, pod, "R"),
                     ApparentPowerSensor(coordinator, pod),
+                    AverageActivePowerSensor(coordinator, pod),
                 )
             )
             if is_prosumer:

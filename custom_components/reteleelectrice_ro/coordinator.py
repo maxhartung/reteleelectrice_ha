@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 from typing import Any
 
@@ -13,6 +13,11 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import AuthenticationError, PortalError, ReteleElectriceClient
+from .average_power import (
+    calculate_average_active_power,
+    instant_active_energy,
+    instant_timestamp,
+)
 from .const import CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DOMAIN
 
 LOGGER = logging.getLogger(DOMAIN)
@@ -41,6 +46,24 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.entry = entry
         self.client = client
+        self._active_energy_samples: dict[str, tuple[float, datetime]] = {}
+        self._average_active_power: dict[str, float] = {}
+
+    def _update_average_active_power(
+        self, pod_name: str, instant: Any, retrieved_at: datetime
+    ) -> float | None:
+        """Update the in-memory average-power calculation for one POD."""
+        energy = instant_active_energy(instant)
+        if energy is None:
+            return self._average_active_power.get(pod_name)
+
+        sample = (energy, instant_timestamp(instant, retrieved_at))
+        previous = self._active_energy_samples.get(pod_name)
+        self._active_energy_samples[pod_name] = sample
+        average_power = calculate_average_active_power(previous, sample)
+        if average_power is not None:
+            self._average_active_power[pod_name] = average_power
+        return self._average_active_power.get(pod_name)
 
     async def _async_setup(self) -> None:
         """Authenticate once before the first coordinated data refresh."""
@@ -147,6 +170,9 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     try:
                         instant = await self.client.async_get_instant_values(pod_name, pod_cnp)
                         current["instant_values"] = instant
+                        current["average_active_power"] = self._update_average_active_power(
+                            pod_name, instant, now
+                        )
                         # Keep the old key for compatibility with existing
                         # entities and callers.
                         current["smart_meter_current"] = instant
@@ -187,6 +213,7 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "power_outages": power_outages,
                 "smart_meter": smart_meter,
                 "instant_values": instant_values,
+                "average_active_power": dict(self._average_active_power),
                 "supplier_data": supplier_data,
             }
         except AuthenticationError as err:
@@ -215,6 +242,9 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if isinstance(account_info, dict):
             cnp = str(account_info.get("CNP__c") or account_info.get("Fiscal_Code__c") or "")
         instant_values = await self.client.async_get_instant_values(pod_name, cnp)
+        average_active_power = self._update_average_active_power(
+            pod_name, instant_values, dt_util.now()
+        )
 
         pods = data.get("pods")
         if not isinstance(pods, dict) or pod_name not in pods:
@@ -228,8 +258,13 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         updated_data["instant_values"] = updated_instant
         updated_pod["instant_values"] = instant_values
         updated_pod["smart_meter_current"] = instant_values
+        updated_pod["average_active_power"] = average_active_power
         updated_pods[pod_name] = updated_pod
         updated_data["pods"] = updated_pods
+        updated_average_power = dict(data.get("average_active_power") or {})
+        if average_active_power is not None:
+            updated_average_power[pod_name] = average_active_power
+        updated_data["average_active_power"] = updated_average_power
         self.async_set_updated_data(updated_data)
 
     @staticmethod
