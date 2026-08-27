@@ -372,7 +372,7 @@ class ArchiveEnergySensor(ReteleElectriceSensor):
     """Annual energy total derived from the portal reading archive."""
 
     _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
 
     def __init__(
@@ -647,7 +647,7 @@ class LoadCurveSensor(ReteleElectriceSensor):
     """Base class for values derived from the monthly load curve."""
 
     _attr_device_class = SensorDeviceClass.ENERGY
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_state_class = SensorStateClass.TOTAL
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
 
     @property
