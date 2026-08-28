@@ -78,9 +78,13 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             raw_pods = await self.client.async_get_pods()
             pod_list = self._normalise_pods(raw_pods)
+            previous_data = self.data if isinstance(self.data, dict) else {}
+            previous_pods = previous_data.get("pods", {})
+            if not pod_list and isinstance(previous_pods, dict) and previous_pods:
+                raise UpdateFailed("Portal returned no PODs; keeping the last valid data")
             pod_data: dict[str, Any] = {}
 
-            account_info: Any = None
+            account_info: Any = previous_data.get("account_info", previous_data.get("account"))
             try:
                 account_info = await self.client.async_get_account_info()
             except AuthenticationError:
@@ -99,17 +103,21 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 cnp = str(account_info.get("CNP__c") or account_info.get("Fiscal_Code__c") or "")
 
             now = dt_util.now()
-            instant_values: dict[str, Any] = {}
-            reading_archive: dict[str, Any] = {}
-            power_outages: dict[str, Any] = {}
-            smart_meter: dict[str, Any] = {}
-            supplier_data: dict[str, Any] = {}
-            pod_reading_details: dict[str, Any] = {}
+            instant_values = dict(previous_data.get("instant_values") or {})
+            reading_archive = dict(previous_data.get("reading_archive") or {})
+            power_outages = dict(previous_data.get("power_outages") or {})
+            smart_meter = dict(previous_data.get("smart_meter") or {})
+            supplier_data = dict(previous_data.get("supplier_data") or {})
+            pod_reading_details = dict(previous_data.get("pod_reading_details") or {})
             for summary in pod_list:
                 pod_name = self._pod_name(summary)
                 if not pod_name:
                     continue
-                current: dict[str, Any] = {"summary": summary}
+                previous_pod = previous_pods.get(pod_name) if isinstance(previous_pods, dict) else None
+                current: dict[str, Any] = (
+                    dict(previous_pod) if isinstance(previous_pod, dict) else {}
+                )
+                current["summary"] = summary
                 pod_cnp = cnp
                 pod_cui = ""
                 try:
@@ -169,14 +177,21 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         LOGGER.warning("Smart-meter history unavailable for %s: %s", pod_name, err)
                     try:
                         instant = await self.client.async_get_instant_values(pod_name, pod_cnp)
-                        current["instant_values"] = instant
-                        current["average_active_power"] = self._update_average_active_power(
-                            pod_name, instant, now
-                        )
-                        # Keep the old key for compatibility with existing
-                        # entities and callers.
-                        current["smart_meter_current"] = instant
-                        instant_values[pod_name] = instant
+                        if instant_active_energy(instant) is not None:
+                            current["instant_values"] = instant
+                            current["average_active_power"] = self._update_average_active_power(
+                                pod_name, instant, now
+                            )
+                            # Keep the old key for compatibility with existing
+                            # entities and callers.
+                            current["smart_meter_current"] = instant
+                            instant_values[pod_name] = instant
+                        else:
+                            LOGGER.warning(
+                                "Instant smart-meter refresh for %s returned no active-energy reading; "
+                                "retaining the last valid values",
+                                pod_name,
+                            )
                     except AuthenticationError:
                         raise
                     except PortalError as err:
@@ -242,6 +257,13 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if isinstance(account_info, dict):
             cnp = str(account_info.get("CNP__c") or account_info.get("Fiscal_Code__c") or "")
         instant_values = await self.client.async_get_instant_values(pod_name, cnp)
+        if instant_active_energy(instant_values) is None:
+            LOGGER.warning(
+                "Instant smart-meter refresh for %s returned no active-energy reading; "
+                "retaining the last valid values",
+                pod_name,
+            )
+            return
         average_active_power = self._update_average_active_power(
             pod_name, instant_values, dt_util.now()
         )

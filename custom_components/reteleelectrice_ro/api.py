@@ -149,6 +149,26 @@ def _extract_frontdoor(page: str) -> str | None:
     return html.unescape(match.group(1)) if match else None
 
 
+def _looks_like_login_page(url: str, page: str = "") -> bool:
+    """Detect a portal login response returned in place of API data."""
+    lowered_url = url.lower()
+    lowered_page = page.lower()
+    return (
+        "pedro_sitelogin" in lowered_url
+        or "loginpage:loginform" in lowered_page
+        or 'name="loginpage:loginform:password"' in lowered_page
+    )
+
+
+def _looks_like_auth_error(value: Any) -> bool:
+    """Return whether an Aura error indicates an expired session."""
+    text = str(value).lower()
+    return any(
+        marker in text
+        for marker in ("session expired", "invalid session", "not authorized", "authentication", "login")
+    )
+
+
 def _json_or_text(payload: str) -> Any:
     cleaned = payload.lstrip()
     cleaned = re.sub(r"^(?:while\s*\(1\);|for\s*\(;;\);)", "", cleaned).lstrip()
@@ -423,7 +443,7 @@ class ReteleElectriceClient:
         if not self.is_logged_in:
             await self.async_login()
 
-    async def async_aura_call(
+    async def _async_aura_call_once(
         self,
         descriptor: str,
         *,
@@ -475,12 +495,22 @@ class ReteleElectriceClient:
                 raise AuthenticationError("Aura session expired")
             if response.status != 200:
                 raise PortalError(f"Aura call returned HTTP {response.status}")
-            result = _json_or_text(await response.text())
+            response_text = await response.text()
+            if _looks_like_login_page(str(response.url), response_text):
+                self._logged_in = False
+                self._bootstrap = None
+                raise AuthenticationError("Aura session expired")
+            result = _json_or_text(response_text)
 
         if isinstance(result, dict) and result.get("actions"):
             action_result = result["actions"][0]
             if action_result.get("state") == "ERROR":
-                raise PortalError(str(action_result.get("error", action_result)))
+                error = action_result.get("error", action_result)
+                if _looks_like_auth_error(error):
+                    self._logged_in = False
+                    self._bootstrap = None
+                    raise AuthenticationError("Aura session expired")
+                raise PortalError(str(error))
             return_value = action_result.get("returnValue", action_result)
             if isinstance(return_value, str):
                 decoded = _json_or_text(return_value)
@@ -488,6 +518,28 @@ class ReteleElectriceClient:
                     return decoded
             return return_value
         return result
+
+    async def async_aura_call(
+        self,
+        descriptor: str,
+        *,
+        params: dict[str, Any] | None = None,
+        calling_descriptor: str = "UNKNOWN",
+    ) -> Any:
+        """Call Aura and retry once after a portal session expiration."""
+        for attempt in range(2):
+            try:
+                return await self._async_aura_call_once(
+                    descriptor,
+                    params=params,
+                    calling_descriptor=calling_descriptor,
+                )
+            except AuthenticationError:
+                if attempt:
+                    raise
+                self._logged_in = False
+                self._bootstrap = None
+                await self.async_login()
 
     async def async_get_pods(self) -> Any:
         return await self.async_aura_call(
@@ -523,7 +575,7 @@ class ReteleElectriceClient:
             calling_descriptor="markup://c:PED_Reading_Archive_Tab",
         )
 
-    async def _call_vf_ws(self, method_name: str, method_params: list[str]) -> Any:
+    async def _call_vf_ws_once(self, method_name: str, method_params: list[str]) -> Any:
         await self._ensure_login()
         page_name = VF_PAGE_MAP.get(method_name)
         if not page_name:
@@ -537,6 +589,10 @@ class ReteleElectriceClient:
             if response.status != 200:
                 raise PortalError(f"Visualforce page returned HTTP {response.status}")
             page_html = await response.text()
+            if _looks_like_login_page(str(response.url), page_html):
+                self._logged_in = False
+                self._bootstrap = None
+                raise AuthenticationError("Visualforce session expired")
 
         fields = _form_fields(page_html)
         form_id, form_action = _form_details(page_html)
@@ -585,6 +641,10 @@ class ReteleElectriceClient:
             if response.status != 200:
                 raise PortalError(f"Visualforce call returned HTTP {response.status}")
             response_text = await response.text()
+            if _looks_like_login_page(str(response.url), response_text):
+                self._logged_in = False
+                self._bootstrap = None
+                raise AuthenticationError("Visualforce session expired")
 
         result = _parse_vf_response(response_text)
         if isinstance(result, str):
@@ -605,6 +665,18 @@ class ReteleElectriceClient:
             len(response_text),
         )
         return result
+
+    async def _call_vf_ws(self, method_name: str, method_params: list[str]) -> Any:
+        """Call Visualforce and retry once after a portal session expiration."""
+        for attempt in range(2):
+            try:
+                return await self._call_vf_ws_once(method_name, method_params)
+            except AuthenticationError:
+                if attempt:
+                    raise
+                self._logged_in = False
+                self._bootstrap = None
+                await self.async_login()
 
     async def async_get_power_outages(self, pod_name: str) -> Any:
         return await self._call_vf_ws("PowerOutages", [pod_name, "RO"])

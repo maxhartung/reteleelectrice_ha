@@ -55,6 +55,9 @@ how often instant values may be requested; if refreshes begin returning errors,
 switch to the hourly schedule.
 
 The portal is a private cloud service with an undocumented interface. Requests are deliberately conservative and the implementation must tolerate portal changes.
+If a portal session expires or a refresh is temporarily rejected, the
+integration retries authentication once and retains the last valid meter
+reading instead of replacing it with `Unknown`.
 
 ## Development
 
