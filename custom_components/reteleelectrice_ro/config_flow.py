@@ -12,7 +12,7 @@ from homeassistant.const import CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 
 from .api import AuthenticationError, PortalError, ReteleElectriceClient
-from .const import CONF_EMAIL, CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL, DOMAIN
+from .const import CONF_EMAIL, DOMAIN
 
 
 async def _validate_credentials(hass: HomeAssistant, email: str, password: str) -> None:
@@ -83,7 +83,6 @@ class ReteleElectriceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data={
                         CONF_EMAIL: email,
                         CONF_PASSWORD: user_input[CONF_PASSWORD],
-                        CONF_UPDATE_INTERVAL: int(DEFAULT_UPDATE_INTERVAL.total_seconds()),
                     },
                 )
 

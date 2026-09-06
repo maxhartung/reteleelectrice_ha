@@ -1,6 +1,6 @@
 {
   "domain": "reteleelectrice_ro",
-  "name": "Rețele Electrice România",
+  "name": "Re\u021bele Electrice Rom\u00e2nia",
   "codeowners": [],
   "config_flow": true,
   "documentation": "https://github.com/maxhartung/reteleelectrice_ha",
@@ -8,5 +8,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/maxhartung/reteleelectrice_ha/issues",
   "requirements": [],
-  "version": "0.2.15"
+  "version": "0.3.0"
 }

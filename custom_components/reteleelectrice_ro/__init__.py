@@ -13,7 +13,7 @@ from .api import ReteleElectriceClient
 from .const import CONF_EMAIL, CONF_PASSWORD, DOMAIN
 from .coordinator import ReteleElectriceCoordinator
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BUTTON]
+PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 
 @dataclass
@@ -33,6 +33,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = ReteleElectriceCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = RuntimeData(client, coordinator)
+    # Remove obsolete entities from this integration's entry on upgrade.
+    from homeassistant.helpers import entity_registry as er
+    from .sensor import UNIQUE_SUFFIXES
+
+    registry = er.async_get(hass)
+    for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if entity.platform == DOMAIN and not (
+            entity.domain == "sensor" and any(
+                entity.unique_id.endswith(f"_{suffix}") for suffix in UNIQUE_SUFFIXES.values()
+            )
+        ):
+            registry.async_remove(entity.entity_id)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 

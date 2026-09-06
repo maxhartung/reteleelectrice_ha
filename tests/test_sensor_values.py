@@ -1,108 +1,45 @@
-"""Tests for smart-meter value extraction."""
-
-import ast
-from datetime import datetime
+"""Verify portal units and timestamps, without Home Assistant installed."""
+import importlib.util
 from pathlib import Path
 import unittest
 
-
-MODULE_PATH = Path(__file__).parents[1] / "custom_components" / "reteleelectrice_ro" / "sensor.py"
-
-
-class SensorValueTests(unittest.TestCase):
-    def _helpers(self) -> dict[str, object]:
-        tree = ast.parse(MODULE_PATH.read_text())
-        wanted = {
-            "_walk_values",
-            "_register_value",
-            "_to_number",
-            "_rows",
-            "_get_energy_value",
-            "_data_map",
-            "_reading_datetime",
-            "_archive_readings",
-            "_archive_years",
-        }
-        nodes = [
-            node
-            for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name in wanted
-        ]
-        module = ast.Module(
-            body=[
-                ast.ImportFrom(
-                    module="__future__",
-                    names=[ast.alias(name="annotations")],
-                    level=0,
-                ),
-                *nodes,
-            ],
-            type_ignores=[],
-        )
-        ast.fix_missing_locations(module)
-        namespace: dict[str, object] = {"datetime": datetime}
-        exec(compile(module, str(MODULE_PATH), "exec"), namespace)
-        return namespace
-
-    def test_typed_energy_register_is_found(self) -> None:
-        namespace = self._helpers()
-        result = namespace["_register_value"](
-            {"energyReadingList": [{"ENERGY_TYPE": "EA", "VALUE": "393,476"}]},
-            "EA",
-        )
-        self.assertEqual(result, "393,476")
-
-    def test_romanian_decimal_is_converted(self) -> None:
-        namespace = self._helpers()
-        self.assertEqual(namespace["_to_number"]("393,476"), 393.476)
-        self.assertEqual(namespace["_to_number"]("1.234,56"), 1234.56)
-
-    def test_instant_response_register_is_found(self) -> None:
-        namespace = self._helpers()
-        instant = {
-            "dataIstantValueList": [
-                {
-                    "energyReadingList": [
-                        {"ENERGY_TYPE": "EA", "VALUE": "393,476"},
-                        {"ENERGY_TYPE": "ER", "VALUE": "1,25"},
-                    ]
-                }
-            ]
-        }
-        self.assertEqual(namespace["_get_energy_value"](instant, "EA"), 393.476)
-        self.assertEqual(namespace["_get_energy_value"](instant, "ER"), 1.25)
-
-    def test_nested_fields_are_case_insensitive(self) -> None:
-        namespace = self._helpers()
-        self.assertEqual(
-            namespace["_walk_values"](
-                {"data": {"sum_ea": "12,5", "p_value": "0,42"}},
-                ("SUM_EA",),
-            ),
-            "12,5",
-        )
-
-    def test_archive_years_are_limited_to_two_latest(self) -> None:
-        namespace = self._helpers()
-        coordinator = type(
-            "Coordinator",
-            (),
-            {
-                "data": {
-                    "reading_archive": {
-                        "POD": {
-                            "XML_Readings": [
-                                {"measureDate": "01.01.2024", "meter": []},
-                                {"measureDate": "01.01.2025", "meter": []},
-                                {"measureDate": "01.01.2026", "meter": []},
-                            ]
-                        }
-                    }
-                }
-            },
-        )()
-        self.assertEqual(namespace["_archive_years"](coordinator, "POD"), [2026, 2025])
+PATH = Path(__file__).parents[1] / 'custom_components/reteleelectrice_ro/meter.py'
+spec = importlib.util.spec_from_file_location('meter', PATH)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class MeterTests(unittest.TestCase):
+    def reading(self, **values):
+        return module.parse_meter({'dataIstantValueList': [values]})
+
+    def test_screenshot_values_estimate_power(self):
+        result = self.reading(UR_VALUE='229,430', IR_VALUE='12,283', LAST_UPDATED='06.09.2026 16:59:45',
+                              energyReadingList=[{'ENERGY_TYPE': 'EA', 'VALUE': '496,220'}])
+        self.assertEqual(result, {'voltage': 229.43, 'current': 12.283, 'estimated_power': 2.818,
+                                  'last_update': '2026-09-06T16:59:45+03:00'})
+
+    def test_timestamp_uses_romanian_winter_timezone(self):
+        self.assertEqual(module.website_timestamp('06.01.2026 16:59:45').utcoffset().total_seconds(), 7200)
+
+    def test_zero_current_is_valid(self):
+        self.assertEqual(self.reading(UR_VALUE='230', IR_VALUE='0')['estimated_power'], 0)
+
+    def test_missing_current_does_not_manufacture_power(self):
+        self.assertIsNone(self.reading(UR_VALUE='230')['estimated_power'])
+
+    def test_missing_update_time_never_uses_reading_date_or_poll_time(self):
+        self.assertIsNone(self.reading(UR_VALUE='230', READING_DATE='06.09.2026')['last_update'])
+
+    def test_empty_response_retains_cache(self):
+        self.assertIsNone(module.parse_meter({'Result': 'Processing'}))
+        self.assertIsNone(module.parse_meter({'dataIstantValueList': []}))
+
+    def test_invalid_numbers_are_unavailable(self):
+        for value in ('NaN', 'inf', '-1', True, '', None):
+            self.assertIsNone(module.number(value))
+        self.assertEqual(module.number('1.234,56'), 1234.56)
+
+    def test_nested_case_insensitive_payload(self):
+        result = module.parse_meter({'result': {'dataistantvaluelist': [{'ur_value': '230','ir_value': '2'}]}})
+        self.assertEqual(result['estimated_power'], .46)

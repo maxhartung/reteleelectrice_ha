@@ -11,23 +11,9 @@ AURA_URL = f"{BASE_URL}/s/sfsites/aura"
 
 CONF_EMAIL = "email"
 CONF_PASSWORD = "password"
-CONF_PODS = "pods"
-CONF_UPDATE_INTERVAL = "update_interval"
-
-DEFAULT_UPDATE_INTERVAL = timedelta(hours=1)
-MIN_UPDATE_INTERVAL = timedelta(minutes=15)
-MAX_UPDATE_INTERVAL = timedelta(hours=24)
-INSTANT_REQUEST_MIN_INTERVAL = timedelta(minutes=15)
-
+DEFAULT_UPDATE_INTERVAL = timedelta(minutes=5)
 ATTRIBUTION = "Data from contulmeu.reteleelectrice.ro"
-
-VF_PAGE_MAP: dict[str, str] = {
-    "CurveDiCaricoGraph": "PED_ProxyCallWSAsync_Curve_VF",
-    "RetriveSingleSelf": "PED_ProxyCallWSAsynSingleSelf_VF",
-    "PowerOutages": "PED_ProxyCallWSAsynPowerOutages_VF",
-    "FindOutMeterHistoryData": "PED_ProxyCallWSAsync_SmartMeter_Vf",
-    "FindOutMeterCurrentData": "PED_ProxyCallWSAsynSmartMeterCurrentData",
+VF_PAGE_MAP = {
     "ReqMeterInstantData": "PED_ProxyCallWSAsynSmartMeterIstantData",
     "FindOutMeterInstantData": "PED_ProxyCallWSAsynSmartMeterIstantData",
-    "queryPOD": "PED_ProxyCallWSAsync_Curve_VF",
 }

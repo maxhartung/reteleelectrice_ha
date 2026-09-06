@@ -6,10 +6,8 @@ import html
 import json
 import logging
 import re
-import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import unquote, urljoin
 
@@ -18,11 +16,9 @@ import aiohttp
 from .const import (
     AURA_URL,
     BASE_URL,
-    INSTANT_REQUEST_MIN_INTERVAL,
     LOGIN_PAGE,
     VF_PAGE_MAP,
 )
-from .load_curve import LoadCurveMonth, parse_load_curve_response
 
 
 LOGGER = logging.getLogger(__name__)
@@ -315,7 +311,6 @@ class ReteleElectriceClient:
         self._bootstrap: AuraBootstrap | None = None
         self._action_counter = 0
         self._logged_in = False
-        self._last_instant_requests: dict[str, float] = {}
 
     @property
     def is_logged_in(self) -> bool:
@@ -337,13 +332,6 @@ class ReteleElectriceClient:
         self._bootstrap = None
         if self._owns_session and self._session is not None and not self._session.closed:
             await self._session.close()
-
-    def can_request_instant_values(self, pod_name: str) -> bool:
-        """Return whether a new two-step instant request is outside the cooldown."""
-        last_request = self._last_instant_requests.get(pod_name)
-        return last_request is None or (
-            time.monotonic() - last_request >= INSTANT_REQUEST_MIN_INTERVAL.total_seconds()
-        )
 
     async def async_login(self) -> None:
         """Log in and bootstrap current Aura runtime values."""
@@ -547,23 +535,9 @@ class ReteleElectriceClient:
             calling_descriptor="markup://c:PED_HomePage",
         )
 
-    async def async_get_pod_details(self, pod_name: str) -> Any:
-        return await self.async_aura_call(
-            "apex://PED_POD_Details_Controller/ACTION$getUserDetailsPodInformation",
-            params={"PodName": pod_name},
-            calling_descriptor="markup://c:PED_POD_Details",
-        )
-
     async def async_get_account_info(self) -> Any:
         return await self.async_aura_call(
             "apex://PED_Utility/ACTION$getAccountInfo",
-            calling_descriptor="markup://c:PED_CustomProfileHeader",
-        )
-
-    async def async_get_contact_info(self) -> Any:
-        """Return the contact details exposed by the portal profile."""
-        return await self.async_aura_call(
-            "apex://PED_Utility/ACTION$getContactInfo",
             calling_descriptor="markup://c:PED_CustomProfileHeader",
         )
 
@@ -678,183 +652,20 @@ class ReteleElectriceClient:
                 self._bootstrap = None
                 await self.async_login()
 
-    async def async_get_power_outages(self, pod_name: str) -> Any:
-        return await self._call_vf_ws("PowerOutages", [pod_name, "RO"])
-
-    async def async_get_reading_archive(
-        self,
-        pod_name: str,
-        start_date: str = "",
-        end_date: str = "",
-        cui: str = "",
-        cnp: str = "",
-    ) -> Any:
-        """Return the portal's historical meter readings for one POD."""
-        now = datetime.now()
-        if not start_date:
-            start_date = (now - timedelta(days=365)).strftime("%d/%m/%Y 00:00:00")
-        if not end_date:
-            end_date = now.strftime("%d/%m/%Y 23:59:59")
-
-        if not cnp and not cui:
-            details = await self.async_get_reading_archive_pod_details(pod_name)
-            if isinstance(details, dict):
-                cnp = str(details.get("cnp") or details.get("CNP") or "")
-                cui = str(details.get("cui") or details.get("CUI") or "")
-        if not cnp and not cui:
-            account = await self.async_get_account_info()
-            if isinstance(account, dict):
-                cnp = str(account.get("CNP__c") or account.get("Fiscal_Code__c") or "")
-                cui = str(account.get("Univocal_Code__c") or "")
-
-        if cnp:
-            params = ["", "", cnp, pod_name, start_date, end_date]
-        elif cui:
-            params = ["", cui, "", pod_name, start_date, end_date]
-        else:
-            params = ["", "", "", pod_name, start_date, end_date]
-        return await self._call_vf_ws("RetriveSingleSelf", params)
-
-    async def async_get_smart_meter_data(
-        self,
-        pod_name: str,
-        start_date: str = "",
-        end_date: str = "",
-        cnp: str = "",
-    ) -> Any:
-        """Return the smart-meter aggregate for the most recent 90 days."""
-        if not cnp:
-            account = await self.async_get_account_info()
-            if isinstance(account, dict):
-                cnp = str(account.get("CNP__c") or account.get("Fiscal_Code__c") or "")
-        if not cnp:
-            # Some accounts do not expose CNP in getAccountInfo. The reference
-            # integration falls back to the POD metadata for this endpoint.
-            details = await self.async_get_reading_archive_pod_details(pod_name)
-            if isinstance(details, dict):
-                cnp = str(details.get("cnp") or details.get("CNP") or "")
-        now = datetime.now()
-        if not start_date:
-            start_date = (now - timedelta(days=90)).strftime("%d/%m/%Y 00:00:00")
-        if not end_date:
-            # Match the reference integration and the portal's date-range
-            # convention: the end date is the start of the current day.
-            end_date = now.strftime("%d/%m/%Y 00:00:00")
-        return await self._call_vf_ws(
-            "FindOutMeterHistoryData",
-            [cnp, "", pod_name, start_date, end_date],
-        )
-
-    async def async_get_smart_meter_current(self, pod_name: str, cnp: str = "") -> Any:
-        if not cnp:
-            account = await self.async_get_account_info()
-            if isinstance(account, dict):
-                cnp = str(account.get("CNP__c") or account.get("Fiscal_Code__c") or "")
+    async def async_meter_params(self, pod_name: str) -> list[str]:
+        """Resolve the identifiers required by the instant-meter service."""
+        account = await self.async_get_account_info()
+        cnp = str(account.get("CNP__c") or account.get("Fiscal_Code__c") or "") if isinstance(account, dict) else ""
         if not cnp:
             details = await self.async_get_reading_archive_pod_details(pod_name)
             if isinstance(details, dict):
                 cnp = str(details.get("cnp") or details.get("CNP") or "")
-        return await self._call_vf_ws("FindOutMeterCurrentData", [cnp, "", pod_name])
+        return [cnp, "", pod_name]
 
-    async def async_get_instant_values(self, pod_name: str, cnp: str = "") -> Any:
-        # Record the start of the two-step operation. The coordinator uses the
-        # same timestamp to prevent a button press from duplicating a request
-        # made by the normal polling cycle.
-        self._last_instant_requests[pod_name] = time.monotonic()
-        if not cnp:
-            account = await self.async_get_account_info()
-            if isinstance(account, dict):
-                cnp = str(account.get("CNP__c") or account.get("Fiscal_Code__c") or "")
-        if not cnp:
-            details = await self.async_get_reading_archive_pod_details(pod_name)
-            if isinstance(details, dict):
-                cnp = str(details.get("cnp") or details.get("CNP") or "")
-        params = [cnp, "", pod_name]
-        request_result = await self._call_vf_ws("ReqMeterInstantData", params)
-        if isinstance(request_result, dict):
-            status = str(request_result.get("Result") or request_result.get("status") or "")
-            if "error" in status.lower():
-                LOGGER.warning(
-                    "Instant smart-meter request failed for %s at %s",
-                    pod_name,
-                    status,
-                )
-                return request_result
-        data_result = await self._call_vf_ws("FindOutMeterInstantData", params)
-        if not (
-            isinstance(data_result, dict)
-            and isinstance(data_result.get("dataIstantValueList"), list)
-            and data_result["dataIstantValueList"]
-        ):
-            LOGGER.warning(
-                "Instant smart-meter response for %s contains no meter readings (%s)",
-                pod_name,
-                _response_summary(data_result),
-            )
-        return data_result
+    async def async_request_meter_data(self, params: list[str]) -> Any:
+        """Submit once; an ambiguous failure must never trigger another submission."""
+        return await self._call_vf_ws_once("ReqMeterInstantData", params)
 
-    async def async_get_supplier_data(self, pod_name: str) -> Any:
-        """Return supplier and technical POD details from the portal."""
-        result = await self._call_vf_ws("queryPOD", [pod_name, "Client_Company"])
-        return self._clean_type_info(result)
-
-    @classmethod
-    def _clean_type_info(cls, value: Any) -> Any:
-        """Remove SOAP/Apex metadata keys from supplier responses."""
-        if isinstance(value, dict):
-            return {
-                key: cls._clean_type_info(item)
-                for key, item in value.items()
-                if not key.endswith("_type_info")
-                and key not in {"apex_schema_type_info", "field_order_type_info"}
-            }
-        if isinstance(value, list):
-            return [cls._clean_type_info(item) for item in value]
-        return value
-
-    async def async_get_load_curve(
-        self,
-        pod_name: str,
-        year: int,
-        month: int,
-        energy_type: str = "WI",
-    ) -> LoadCurveMonth:
-        """Fetch one month's active-consumption curve.
-
-        ``WI`` is the portal's code for consumed active energy. The live
-        portal sends the POD, energy type, start date, and end date in this
-        order to ``CurveDiCaricoGraph``.
-        """
-        import calendar
-
-        if not 1 <= month <= 12:
-            raise PortalProtocolError(f"Invalid curve month: {month}")
-        last_day = calendar.monthrange(year, month)[1]
-        method_params = [
-            pod_name,
-            energy_type,
-            f"01/{month:02d}/{year} 00:00:00",
-            f"{last_day:02d}/{month:02d}/{year} 23:59:59",
-            "",
-        ]
-        # The current portal UI uses WI for consumed active energy and sends a
-        # fifth, empty argument. The server indexes that placeholder even
-        # though it is not displayed in the browser's console input log.
-        result = await self._call_vf_ws("CurveDiCaricoGraph", method_params)
-        try:
-            return parse_load_curve_response(result)
-        except ValueError as err:
-            raise PortalProtocolError("Load-curve response could not be parsed") from err
-
-    async def async_get_load_curve_csv(
-        self, method_params: list[str]
-    ) -> LoadCurveMonth:
-        """Compatibility wrapper for callers with captured portal parameters."""
-        curve_params = list(method_params)
-        if len(curve_params) == 4:
-            curve_params.append("")
-        result = await self._call_vf_ws("CurveDiCaricoGraph", curve_params)
-        try:
-            return parse_load_curve_response(result)
-        except ValueError as err:
-            raise PortalProtocolError("Load-curve response could not be parsed") from err
+    async def async_read_meter_data(self, params: list[str]) -> Any:
+        """Read the latest available result without requesting a new measurement."""
+        return await self._call_vf_ws("FindOutMeterInstantData", params)

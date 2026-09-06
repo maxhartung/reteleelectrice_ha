@@ -1,68 +1,60 @@
 # Rețele Electrice România for Home Assistant
 
-An independent Home Assistant custom integration for reading electricity and smart-meter data from the Rețele Electrice România customer portal.
+Independent integration for the customer portal's instantaneous smart-meter data.
 
-This project is in early development. It connects directly to the user's portal account; it does not use a license server, shared credential service, or central proxy.
+Each smart-meter POD exposes exactly four sensors:
 
-## Initial scope
+- **Voltage (V)**: phase R, as reported by the meter.
+- **Current (A)**: phase R, as reported by the meter.
+- **Estimated power (kW)**: voltage × current ÷ 1,000, assuming power factor 1.
+  This is an estimate; actual active power depends on power factor. It is not
+  energy in kWh and must not be used as a measured energy source.
+- **Website last update**: the portal's `LAST_UPDATED` timestamp, interpreted in
+  Europe/Bucharest when no offset is supplied. It never uses HA's polling time.
 
-- Dynamic Salesforce Experience Cloud login and session bootstrap.
-- POD discovery and meter metadata.
-- Current smart-meter values.
-- Separate cumulative instant-consumption/production entities, phase voltage
-  and current sensors, apparent power calculated as V×A, and active-power data
-  when the portal supplies it.
-- Monthly load-curve data at the portal's available granularity (currently
-  15-minute data for smart meters), aggregated into hourly and daily values.
-- Reading-archive indexes, annual totals, interruption status, smart-meter
-  aggregates, and supplier/POD metadata when available.
-- Historical readings, outages, and the two-stage consumption-data workflow.
+The values describe the last measurement published by the website, not a live
+measurement at the time you view the card.
 
-For each POD with curve data, the integration also creates:
+## Automatic requests
 
-- `Consum zilnic (curbă)`: total active consumption for the latest day supplied
-  by the portal.
-- `Consum ultima oră (curbă)`: the latest available hourly bucket.
+No separate Home Assistant automation or button is needed. The integration
+checks available results every five minutes and automatically submits
+`ReqMeterInstantData` when eligible. `FindOutMeterInstantData` retrieves results
+separately, so a pending request does not cause repeated submissions.
 
-Both sensors include `daily_consumption` and `hourly_consumption` attributes so
-the values can be used in dashboards and automations. The portal may publish
-curve data with a delay, so the latest day is not necessarily today.
+Requests are spaced at least two hours apart, with at most 10 attempts in any
+rolling 24 hours per configured account. After the tenth request, submissions
+pause until the oldest attempt leaves that window. Processing can take up to
+two hours. Failed or ambiguous attempts also count, and submissions are not
+retried automatically. The quota and last readings are saved across restarts.
+Manual website requests are outside the integration's local counter and may
+cause the portal to reject an otherwise eligible automatic request.
 
-The smart-meter refresh also exposes the latest phase-R voltage and current
-as sensors, plus `Putere aparentă (V×A)` in kVA. The portal may report
-voltage/current while leaving active power (`P_VALUE`) empty. V×A is apparent
-power, not active power, so it must not be used as kW/kWh without a power
-factor. Home Assistant's Recorder stores the sensor history automatically when
-Recorder is enabled; the cumulative instant-consumption sensor is the correct
-source for the Energy dashboard.
+Empty or failed reads retain the previous reading; an old timestamp makes its
+age visible. Partial readings do not combine voltage and current from different
+measurements. Authentication expiry is handled through Home Assistant's
+reauthentication flow.
 
-After two different smart-meter readings, `Putere activă medie` is calculated
-from the meter's cumulative `Energia Activă 1.8.0` register as `ΔkWh / hours`.
-It represents the average active power between those meter timestamps, not an
-instantaneous wattage reading.
+## Upgrade and dashboard
 
-## Instant-meter refresh automation
+Update with HACS, then restart Home Assistant. Obsolete integration entities are
+removed from the entity registry on setup. Existing voltage/current entity IDs
+are preserved. Historical recorder data is not purged.
 
-The integration creates an `Actualizare valori instantanee` button for every
-POD. Pressing it runs the portal's two-step `ReqMeterInstantData` and
-`FindOutMeterInstantData` workflow, then updates the smart-meter entities.
+Remove any old button-press automations. The integration no longer fetches
+load curves, reading history, outages, supplier details, cumulative energy,
+production, or average power. Only account/POD identifiers needed for the meter
+API are retained internally.
 
-Example automations are in
-[`examples/instant_refresh_automations.yaml`](examples/instant_refresh_automations.yaml).
-Replace the example button ID with the ID shown in Home Assistant, then use the
-15-minute or hourly schedule, not both at the same time. The portal can limit
-how often instant values may be requested; if refreshes begin returning errors,
-switch to the hourly schedule.
-
-The portal is a private cloud service with an undocumented interface. Requests are deliberately conservative and the implementation must tolerate portal changes.
-If a portal session expires or a refresh is temporarily rejected, the
-integration retries authentication once and retains the last valid meter
-reading instead of replacing it with `Unknown`.
+Use an Entities card with the four sensors. See
+[the card example](examples/smart_meter_card.yaml); substitute the IDs shown in
+your Home Assistant installation.
 
 ## Development
 
-The pure load-curve parser can be tested without Home Assistant:
-
-```bash
+```sh
 python3 -m unittest discover -s tests -v
 ```
+
+Tests cover portal parsing, estimated power, timestamp handling, request quota
+boundaries, and coordinator persistence/failure behavior.

@@ -1,0 +1,13 @@
+type: entities
+title: Smart meter
+show_header_toggle: false
+entities:
+  - entity: sensor.retele_electrice_your_pod_tensiune_faza_r
+    name: Voltage
+  - entity: sensor.retele_electrice_your_pod_curent_faza_r
+    name: Current
+  - entity: sensor.retele_electrice_your_pod_estimated_power
+    name: Estimated power
+  - entity: sensor.retele_electrice_your_pod_website_last_update
+    name: Website last update
+    format: datetime
