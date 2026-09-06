@@ -36,13 +36,19 @@ class AuthError(PortalError):
 
 
 class Store:
-    def __init__(self, *args):
+    def __init__(self, *args, **kwargs):
         self.saved = None
         self.events = []
         self.fail = False
 
     async def async_save(self, data):
         self.events.append('save')
+        try:
+            await self._async_write_data(data)
+        except OSError:
+            pass  # Home Assistant Store logs WriteError instead of raising it.
+
+    async def _async_write_data(self, data):
         if self.fail:
             raise OSError('disk unavailable')
         self.saved = deepcopy(data)
@@ -51,12 +57,20 @@ class Store:
         return deepcopy(self.saved)
 
 
+def confirmed_store_class():
+    tree = ast.parse((ROOT / 'storage.py').read_text())
+    tree.body = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+    namespace = {'Store': Store}
+    exec(compile(tree, 'storage.py', 'exec'), namespace)
+    return namespace['ConfirmedStore']
+
+
 def coordinator_class():
     tree = ast.parse((ROOT / 'coordinator.py').read_text())
     # Stub only HA's framework boundary; execute the real coordinator unchanged.
     tree.body = [n for n in tree.body if not isinstance(n, (ast.Import, ast.ImportFrom)) or
                  isinstance(n, ast.ImportFrom) and n.module == '__future__']
-    namespace = dict(Any=object, DataUpdateCoordinator=CoordinatorBase, Store=Store, datetime=datetime,
+    namespace = dict(Any=object, DataUpdateCoordinator=CoordinatorBase, ConfirmedStore=confirmed_store_class(), datetime=datetime,
                      timezone=timezone, logging=logging, DOMAIN='reteleelectrice_ro',
                      DEFAULT_UPDATE_INTERVAL=timedelta(minutes=5), PortalError=PortalError,
                      AuthenticationError=AuthError, ConfigEntryAuthFailed=AuthError,
@@ -72,7 +86,8 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.client.async_get_pods.return_value = [{'Name': 'POD', 'Smart_meter__c': True}]
         self.client.async_meter_params.return_value = ['', '', 'POD']
         self.client.async_read_meter_data.return_value = {'dataIstantValueList': [{
-            'UR_VALUE': '230', 'IR_VALUE': '2', 'LAST_UPDATED': '06.09.2026 16:59:45'}]}
+            'UR_VALUE': '230', 'IR_VALUE': '2', 'LAST_UPDATED': '06.09.2026 16:59:45',
+            'energyReadingList': [{'ENERGY_TYPE': 'EA', 'VALUE': '496,220'}]}]}
         self.entry = type('Entry', (), {'entry_id': 'test'})()
         self.coordinator = coordinator_class()(None, self.entry, self.client)
         await self.coordinator._async_setup()
@@ -126,3 +141,44 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.coordinator._async_update_data(), {'pods': {}})
         self.client.async_request_meter_data.assert_not_awaited()
         self.client.async_read_meter_data.assert_not_awaited()
+
+    async def test_expired_submission_renews_session_without_resubmitting(self):
+        self.client.async_request_meter_data.side_effect = AuthError('expired')
+        result = await self.coordinator._async_update_data()
+        self.client.async_relogin.assert_awaited_once()
+        self.client.async_request_meter_data.assert_awaited_once()
+        self.assertEqual(result['pods']['POD']['energy_import'], 496.22)
+        await self.coordinator._async_update_data()
+        self.client.async_request_meter_data.assert_awaited_once()
+
+    async def test_invalid_credentials_after_renewal_require_reauth(self):
+        self.client.async_request_meter_data.side_effect = AuthError('expired')
+        self.client.async_relogin.side_effect = AuthError('invalid credentials')
+        with self.assertRaises(AuthError):
+            await self.coordinator._async_update_data()
+
+    async def test_partial_newer_snapshot_preserves_complete_previous_reading(self):
+        first = await self.coordinator._async_update_data()
+        self.client.async_read_meter_data.return_value = {'dataIstantValueList': [
+            {'LAST_UPDATED': '06.09.2026 17:00:00'}]}
+        self.assertEqual(await self.coordinator._async_update_data(), first)
+        self.assertEqual(self.coordinator._store.saved['meters'], first['pods'])
+
+    async def test_empty_initial_discovery_retries_setup(self):
+        self.client.async_get_pods.return_value = []
+        with self.assertRaises(PortalError):
+            await self.coordinator._async_update_data()
+        self.client.async_request_meter_data.assert_not_awaited()
+
+    async def test_malformed_discovery_retries_setup(self):
+        self.client.async_get_pods.return_value = {'Result': 'unavailable'}
+        with self.assertRaises(PortalError):
+            await self.coordinator._async_update_data()
+
+    async def test_realistic_swallowed_write_failure_preserves_previous_disk_state(self):
+        await self.coordinator._async_update_data()
+        before = deepcopy(self.coordinator._store.saved)
+        self.coordinator._store.fail = True
+        with self.assertRaises(OSError):
+            await self.coordinator._save()
+        self.assertEqual(self.coordinator._store.saved, before)

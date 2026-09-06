@@ -9,26 +9,26 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import AuthenticationError, PortalError, ReteleElectriceClient
 from .consumption_request import ConsumptionRequestState
 from .const import DEFAULT_UPDATE_INTERVAL, DOMAIN
 from .meter import parse_meter
+from .storage import ConfirmedStore
 
 LOGGER = logging.getLogger(__name__)
 
 
 class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Keep the four meter values and persist quota before every submission."""
+    """Keep the smart-meter values and persist quota before every submission."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, client: ReteleElectriceClient) -> None:
         super().__init__(hass, logger=LOGGER, name=DOMAIN, config_entry=entry,
                          update_interval=DEFAULT_UPDATE_INTERVAL, always_update=False)
         self.entry = entry
         self.client = client
-        self._store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.meter")
+        self._store = ConfirmedStore(hass, 1, f"{DOMAIN}.{entry.entry_id}.meter", atomic_writes=True)
         self._requests = ConsumptionRequestState()
         self._meters: dict[str, Any] = {}
         self._params: dict[str, list[str]] = {}
@@ -53,7 +53,7 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         try:
             pods = self._normalise_pods(await self.client.async_get_pods())
-            if not pods and self._meters:
+            if not any(self._pod_name(pod) for pod in pods):
                 raise UpdateFailed("Portal returned no PODs; retaining the last meter readings")
             result = {}
             for summary in sorted(pods, key=lambda item: self._last_requests.get(self._pod_name(item), "")):
@@ -74,7 +74,9 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         try:
                             await self.client.async_request_meter_data(params)
                         except AuthenticationError:
-                            raise
+                            # The submission may have reached the server. Renew the
+                            # session, but never replay it or release its reservation.
+                            await self.client.async_relogin()
                         except PortalError as err:
                             LOGGER.warning("Meter request failed; attempt remains counted: %s", err)
                     reading = parse_meter(await self.client.async_read_meter_data(params))

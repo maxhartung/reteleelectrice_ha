@@ -2,7 +2,7 @@
 
 Independent integration for the customer portal's instantaneous smart-meter data.
 
-Each smart-meter POD exposes exactly four sensors:
+The overview card shows four smart-meter values:
 
 - **Voltage (V)**: phase R, as reported by the meter.
 - **Current (A)**: phase R, as reported by the meter.
@@ -15,6 +15,25 @@ Each smart-meter POD exposes exactly four sensors:
 The values describe the last measurement published by the website, not a live
 measurement at the time you view the card.
 
+## Energy dashboard
+
+A fifth sensor, **Grid energy imported (kWh)**, reads the meter's cumulative
+`Energia Activa 1.8.0` / `EA` register from the same website response. It has
+`device_class: energy`, `state_class: total_increasing`, and unit `kWh`, making
+it eligible for **Energy imported from grid** in the Energy dashboard.
+The overview card still shows only its four display values.
+
+Select this sensor for energy imports, not **Estimated power**, which measures
+kW. Home Assistant calculates energy use from changes in the cumulative
+register; the initial meter total is a baseline, not consumption for today.
+Readings arrive with the portal's delay, so usage is recorded when HA receives
+them, not reconstructed at the meter's original measurement time.
+
+[Home Assistant's Energy troubleshooting guide](https://www.home-assistant.io/docs/energy/faq/#troubleshooting-missing-entities)
+describes the required attributes and statistics checks. Old removed sensors
+may still appear as historical statistics; use the new Grid energy imported
+sensor rather than an old entity without a state.
+
 ## Automatic requests
 
 No separate Home Assistant automation or button is needed. The integration
@@ -26,13 +45,18 @@ Requests are spaced at least two hours apart, with at most 10 attempts in any
 rolling 24 hours per configured account. After the tenth request, submissions
 pause until the oldest attempt leaves that window. Processing can take up to
 two hours. Failed or ambiguous attempts also count, and submissions are not
-retried automatically. The quota and last readings are saved across restarts.
+retried automatically. Request rejection is logged, and the quota and last
+complete readings are saved across restarts. Requests are blocked if an atomic
+quota write fails or is deferred.
 Manual website requests are outside the integration's local counter and may
 cause the portal to reject an otherwise eligible automatic request.
 
 Empty or failed reads retain the previous reading; an old timestamp makes its
 age visible. Partial readings do not combine voltage and current from different
-measurements. Authentication expiry is handled through Home Assistant's
+measurements. An empty initial POD discovery is retried. Expired sessions are
+renewed automatically with saved credentials, including after a submission
+fails authentication; the submission is never replayed. Temporary login-server
+failures are retried later. Invalid credentials require Home Assistant's
 reauthentication flow.
 
 ## Upgrade and dashboard
@@ -42,7 +66,7 @@ removed from the entity registry on setup. Existing voltage/current entity IDs
 are preserved. Historical recorder data is not purged.
 
 Remove any old button-press automations. The integration no longer fetches
-load curves, reading history, outages, supplier details, cumulative energy,
+load curves, reading history, outages, supplier details,
 production, or average power. Only account/POD identifiers needed for the meter
 API are retained internally.
 

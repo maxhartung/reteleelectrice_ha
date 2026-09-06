@@ -342,7 +342,7 @@ class ReteleElectriceClient:
             login_url, allow_redirects=True, timeout=REQUEST_TIMEOUT
         ) as response:
             if response.status != 200:
-                raise AuthenticationError(f"Login page returned HTTP {response.status}")
+                raise PortalError(f"Login page returned HTTP {response.status}")
             login_html = await response.text()
             login_page_url = str(response.url)
 
@@ -372,6 +372,8 @@ class ReteleElectriceClient:
             post_html = await response.text()
             if response.status in (401, 403):
                 raise AuthenticationError("Portal rejected the credentials")
+            if response.status >= 400:
+                raise PortalError(f"Login submission returned HTTP {response.status}")
             redirect = response.headers.get("Location") or _extract_frontdoor(post_html)
 
         if not redirect:
@@ -382,13 +384,13 @@ class ReteleElectriceClient:
             timeout=REQUEST_TIMEOUT,
         ) as response:
             if response.status >= 400:
-                raise AuthenticationError(f"Salesforce redirect returned HTTP {response.status}")
+                raise PortalError(f"Salesforce redirect returned HTTP {response.status}")
 
         async with session.get(
             f"{BASE_URL}/s/", allow_redirects=True, timeout=REQUEST_TIMEOUT
         ) as response:
             if response.status != 200:
-                raise AuthenticationError(f"Portal shell returned HTTP {response.status}")
+                raise PortalError(f"Portal shell returned HTTP {response.status}")
             shell_html = await response.text()
 
         self._bootstrap = self._extract_bootstrap(shell_html)
@@ -652,6 +654,12 @@ class ReteleElectriceClient:
                 self._bootstrap = None
                 await self.async_login()
 
+    async def async_relogin(self) -> None:
+        """Renew an expired session without replaying a meter request."""
+        self._logged_in = False
+        self._bootstrap = None
+        await self.async_login()
+
     async def async_meter_params(self, pod_name: str) -> list[str]:
         """Resolve the identifiers required by the instant-meter service."""
         account = await self.async_get_account_info()
@@ -664,7 +672,15 @@ class ReteleElectriceClient:
 
     async def async_request_meter_data(self, params: list[str]) -> Any:
         """Submit once; an ambiguous failure must never trigger another submission."""
-        return await self._call_vf_ws_once("ReqMeterInstantData", params)
+        result = await self._call_vf_ws_once("ReqMeterInstantData", params)
+        if not isinstance(result, dict):
+            raise PortalProtocolError("Meter request returned an unrecognized response")
+        status = str(result.get("Result") or result.get("status") or "").upper()
+        if status != "OK":
+            if _looks_like_auth_error(result.get("ErrorMessage") or status):
+                raise AuthenticationError("Meter request session expired")
+            raise PortalError("Portal rejected the meter request or did not confirm acceptance")
+        return result
 
     async def async_read_meter_data(self, params: list[str]) -> Any:
         """Read the latest available result without requesting a new measurement."""
