@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import logging
+from types import SimpleNamespace
 from pathlib import Path
 import unittest
 from unittest.mock import AsyncMock
@@ -32,6 +33,14 @@ class PortalError(Exception):
 
 
 class AuthError(PortalError):
+    pass
+
+
+class ClientError(Exception):
+    pass
+
+
+class SessionExpiredError(AuthError):
     pass
 
 
@@ -74,7 +83,9 @@ def coordinator_class():
                      timezone=timezone, logging=logging, DOMAIN='reteleelectrice_ro',
                      DEFAULT_UPDATE_INTERVAL=timedelta(minutes=5), PortalError=PortalError,
                      AuthenticationError=AuthError, ConfigEntryAuthFailed=AuthError,
+                     SessionExpiredError=SessionExpiredError,
                      UpdateFailed=PortalError, ConsumptionRequestState=load('consumption_request').ConsumptionRequestState,
+                     aiohttp=SimpleNamespace(ClientError=ClientError),
                      parse_meter=load('meter').parse_meter)
     exec(compile(tree, 'coordinator.py', 'exec'), namespace)
     return namespace['ReteleElectriceCoordinator']
@@ -83,6 +94,7 @@ def coordinator_class():
 class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.client = AsyncMock()
+        self.client.is_logged_in = True
         self.client.async_get_pods.return_value = [{'Name': 'POD', 'Smart_meter__c': True}]
         self.client.async_meter_params.return_value = ['', '', 'POD']
         self.client.async_read_meter_data.return_value = {'dataIstantValueList': [{
@@ -182,3 +194,66 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(OSError):
             await self.coordinator._save()
         self.assertEqual(self.coordinator._store.saved, before)
+
+    async def test_timed_out_submission_is_counted_and_existing_result_is_read(self):
+        self.client.async_request_meter_data.side_effect = TimeoutError()
+        result = await self.coordinator._async_update_data()
+        self.assertEqual(result['pods']['POD']['energy_import'], 496.22)
+        await self.coordinator._async_update_data()
+        self.client.async_request_meter_data.assert_awaited_once()
+        self.assertEqual(len(self.coordinator._store.saved['attempts']), 1)
+
+    async def test_network_failure_on_meter_read_keeps_cached_snapshot(self):
+        first = await self.coordinator._async_update_data()
+        self.client.async_read_meter_data.side_effect = ClientError('connection lost')
+        self.assertEqual(await self.coordinator._async_update_data(), first)
+        self.assertEqual(self.coordinator.diagnostics['meter_statuses'], ['ClientError'])
+
+    async def test_diagnostics_distinguish_connection_auth_and_missing_data(self):
+        self.client.async_get_pods.side_effect = TimeoutError()
+        with self.assertRaises(PortalError):
+            await self.coordinator._async_update_data()
+        self.assertEqual(self.coordinator.diagnostics['poll_status'], 'connection_failed')
+        self.client.async_get_pods.side_effect = AuthError()
+        with self.assertRaises(AuthError):
+            await self.coordinator._async_update_data()
+        self.assertEqual(self.coordinator.diagnostics['poll_status'], 'authentication_failed')
+        self.client.async_get_pods.side_effect = None
+        self.client.async_read_meter_data.return_value = {'Result': 'Processing'}
+        await self.coordinator._async_update_data()
+        diagnostics = self.coordinator.diagnostics
+        self.assertEqual(diagnostics['poll_status'], 'ok')
+        self.assertEqual(diagnostics['meter_statuses'], ['no_complete_reading'])
+        self.assertNotIn('POD', repr(diagnostics))
+
+    async def test_rejected_renewed_session_retries_instead_of_requiring_password(self):
+        self.client.async_get_pods.side_effect = SessionExpiredError()
+        with self.assertRaises(PortalError) as ctx:
+            await self.coordinator._async_update_data()
+        self.assertNotIsInstance(ctx.exception, AuthError)
+        self.assertEqual(self.coordinator.diagnostics['poll_status'], 'session_expired')
+
+    async def test_empty_account_response_after_working_poll_renews_session(self):
+        first = await self.coordinator._async_update_data()
+        self.client.async_get_pods.side_effect = [[], [{'Name': 'POD', 'Smart_meter__c': True}]]
+        self.assertEqual(await self.coordinator._async_update_data(), first)
+        self.client.async_relogin.assert_awaited_once()
+        self.client.async_request_meter_data.assert_awaited_once()
+        self.assertEqual(self.client.async_read_meter_data.await_count, 2)
+
+    async def test_persistently_empty_account_retries_only_once_per_poll(self):
+        self.client.async_get_pods.return_value = []
+        with self.assertRaises(PortalError):
+            await self.coordinator._async_update_data()
+        self.assertEqual(self.client.async_get_pods.await_count, 2)
+        self.client.async_relogin.assert_awaited_once()
+        self.client.async_request_meter_data.assert_not_awaited()
+
+    async def test_empty_account_recovery_does_not_turn_temporary_login_failure_into_reauth(self):
+        self.client.async_get_pods.return_value = []
+        self.client.async_relogin.side_effect = PortalError('login server unavailable')
+        with self.assertRaises(PortalError) as ctx:
+            await self.coordinator._async_update_data()
+        self.assertNotIsInstance(ctx.exception, AuthError)
+        self.client.async_relogin.assert_awaited_once()
+        self.client.async_request_meter_data.assert_not_awaited()

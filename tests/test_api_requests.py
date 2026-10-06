@@ -13,7 +13,7 @@ def client_class():
     tree = ast.parse(PATH.read_text())
     selected = []
     for node in tree.body:
-        if isinstance(node, ast.ClassDef) and node.name in {'PortalError', 'AuthenticationError', 'PortalProtocolError'}:
+        if isinstance(node, ast.ClassDef) and node.name in {'PortalError', 'AuthenticationError', 'SessionExpiredError', 'PortalProtocolError'}:
             selected.append(node)
         elif isinstance(node, ast.FunctionDef) and node.name == '_looks_like_auth_error':
             selected.append(node)

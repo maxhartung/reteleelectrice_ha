@@ -59,6 +59,37 @@ fails authentication; the submission is never replayed. Temporary login-server
 failures are retried later. Invalid credentials require Home Assistant's
 reauthentication flow.
 
+Each configured account has its own cookie session. Salesforce session-error
+responses and login redirects trigger one renewal for reads. If the renewed
+session is also rejected, polling retries later instead of requiring a new
+password. A rejected login still starts Home Assistant's reauthentication flow.
+If a previously working integration loses its values after several days,
+session recovery also handles empty account responses and unusable Aura
+metadata. Empty POD discovery renews the login and retries once before failing
+the poll. No Home Assistant restart is needed to trigger those recovery paths.
+
+## Troubleshooting unavailable sensors
+
+Waiting several days will not resolve a rejected login or a portal response
+that cannot be parsed. Check **Settings → Devices & services → Rețele Electrice
+România** for a setup or reauthentication error, then **Settings → System →
+Logs** for this integration's messages.
+
+Download diagnostics from the integration entry's menu. In version 1.0.0,
+`polling` includes the last poll time, session initialization flag, request
+attempt times, and per-meter outcomes. `session_expired` means the portal
+rejected the renewed session; `authentication_failed` means login failed;
+`connection_failed` means discovery could not reach the portal.
+`no_complete_reading` means the result did not contain a complete meter
+snapshot. Diagnostics omit cookies, tokens, POD identifiers, and raw portal
+responses. The session initialization flag describes local login state; it
+does not guarantee the server still accepts that session.
+
+If only the Energy dashboard is missing data while the meter entities have
+values, check that **Grid energy imported** is selected and has a numeric kWh
+value. It needs a baseline and a later increasing reading before HA can
+calculate consumption.
+
 ## Upgrade and dashboard
 
 Update with HACS, then restart Home Assistant. Obsolete integration entities are

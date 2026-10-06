@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+import aiohttp
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
@@ -49,7 +50,7 @@ class ReteleElectriceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
             except AuthenticationError:
                 errors["base"] = "invalid_auth"
-            except PortalError:
+            except (PortalError, aiohttp.ClientError, TimeoutError):
                 errors["base"] = "cannot_connect"
             else:
                 return self.async_update_reload_and_abort(
@@ -73,7 +74,7 @@ class ReteleElectriceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await _validate_credentials(self.hass, email, user_input[CONF_PASSWORD])
             except AuthenticationError:
                 errors["base"] = "invalid_auth"
-            except PortalError:
+            except (PortalError, aiohttp.ClientError, TimeoutError):
                 errors["base"] = "cannot_connect"
             else:
                 await self.async_set_unique_id(email)

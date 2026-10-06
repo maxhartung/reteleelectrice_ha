@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import aiohttp
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import ReteleElectriceClient
 from .const import CONF_EMAIL, CONF_PASSWORD, DOMAIN
@@ -28,7 +30,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     client = ReteleElectriceClient(
         entry.data[CONF_EMAIL],
         entry.data[CONF_PASSWORD],
-        async_get_clientsession(hass),
+        # Keep Salesforce cookies separate from other entries and integrations.
+        async_create_clientsession(hass, cookie_jar=aiohttp.CookieJar()),
     )
     coordinator = ReteleElectriceCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
