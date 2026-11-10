@@ -1,0 +1,9 @@
+type: statistic
+entity: reteleelectrice_ro:ro001e110948168_detailed_import_cost
+name: Estimated electricity cost this month
+icon: mdi:cash
+stat_type: change
+period:
+  calendar:
+    period: month
+    offset: 0

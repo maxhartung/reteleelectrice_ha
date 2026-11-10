@@ -24,5 +24,16 @@
     "abort": {
       "already_configured": "Acest cont este deja configurat."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Cost estimat al energiei",
+        "description": "Tarif fix în RON/kWh, inclusiv TVA și taxele per kWh. Se aplică întregului istoric păstrat; schimbarea lui recalculează toate estimările anterioare. Nu include abonamente sau alte costuri fixe.",
+        "data": {
+          "import_price_ron_kwh": "Preț import energie (RON/kWh)"
+        }
+      }
+    }
   }
 }

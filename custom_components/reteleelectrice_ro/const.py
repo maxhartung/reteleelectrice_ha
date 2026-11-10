@@ -11,6 +11,8 @@ AURA_URL = f"{BASE_URL}/s/sfsites/aura"
 
 CONF_EMAIL = "email"
 CONF_PASSWORD = "password"
+CONF_IMPORT_PRICE = "import_price_ron_kwh"
+DEFAULT_IMPORT_PRICE = 1.06
 DEFAULT_UPDATE_INTERVAL = timedelta(minutes=5)
 ATTRIBUTION = "Data from contulmeu.reteleelectrice.ro"
 VF_PAGE_MAP = {

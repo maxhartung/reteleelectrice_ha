@@ -26,13 +26,14 @@ class BackfillTests(unittest.IsolatedAsyncioTestCase):
         ns = dict(datetime=datetime, timedelta=timedelta, PORTAL_ZONE=curve.PORTAL_ZONE,
                   parse_load_data=curve.parse_load_data, hourly_energy=curve.hourly_energy,
                   merge_load_row=curve.merge_load_row, HomeAssistantError=RuntimeError,
+                  CONF_IMPORT_PRICE='import_price_ron_kwh', DEFAULT_IMPORT_PRICE=1.06,
                   ConfirmedStore=lambda *a, **kw: self.store, DOMAIN='reteleelectrice_ro',
                   PortalError=PortalError, aiohttp=SimpleNamespace(ClientError=ConnectionError),
                   LOGGER=logging.getLogger(__name__), StatisticMeanType=SimpleNamespace(NONE=0),
                   async_add_external_statistics=self.import_stats)
         exec(compile(tree, 'backfill.py', 'exec'), ns)
         self.client = SimpleNamespace(async_get_detailed_load=AsyncMock())
-        self.backfill = ns['DetailedBackfill'](None, SimpleNamespace(entry_id='test'), self.client)
+        self.backfill = ns['DetailedBackfill'](None, SimpleNamespace(entry_id='test', options={}), self.client)
         await self.backfill.async_load()
         self.yesterday = datetime.now(curve.PORTAL_ZONE).date() - timedelta(days=1)
         self.client.async_get_detailed_load.return_value = payload(day=self.yesterday.isoformat())
@@ -67,7 +68,7 @@ class BackfillTests(unittest.IsolatedAsyncioTestCase):
         self.client.async_get_detailed_load.side_effect = PortalError()
         await self.backfill.async_update('POD', ['id', '', 'POD'])
         self.assertEqual(self.backfill.data, saved)
-        self.assertEqual(self.import_stats.call_count, 2)
+        self.assertEqual(self.import_stats.call_count, 4)
 
 
     async def test_short_response_does_not_erase_complete_persisted_day(self):
@@ -107,3 +108,34 @@ class BackfillTests(unittest.IsolatedAsyncioTestCase):
         # Startup replay must not delay the first fresh fetch by six hours.
         await self.backfill.async_update('POD', ['id', '', 'POD'])
         self.client.async_get_detailed_load.assert_awaited_once()
+
+    async def test_estimated_cost_uses_tariff_and_preserves_energy_statistics(self):
+        await self.backfill.async_update('POD', ['id', '', 'POD'])
+        calls = {call.args[1]['statistic_id']: call.args for call in self.import_stats.call_args_list}
+        _, metadata, cost = calls['reteleelectrice_ro:pod_detailed_import_cost']
+        energy = calls['reteleelectrice_ro:pod_detailed_import'][2]
+        self.assertEqual(metadata['unit_of_measurement'], 'RON')
+        self.assertIsNone(metadata['unit_class'])
+        self.assertEqual(metadata['mean_type'], 0)
+        self.assertEqual(cost[0]['sum'], 0)
+        self.assertEqual(cost[1]['sum'], .53)
+        self.assertEqual(cost[-1]['sum'], 12.72)
+        self.assertEqual(energy[-1]['sum'], 12)
+        self.assertEqual([s['start'] for s in cost], [s['start'] for s in energy])
+
+    async def test_tariff_change_reprices_cached_costs_without_duplicate_energy(self):
+        await self.backfill.async_update('POD', ['id', '', 'POD'])
+        cached = deepcopy(self.backfill.data)
+        self.import_stats.reset_mock()
+        self.backfill = type(self.backfill)(None, SimpleNamespace(
+            entry_id='test', options={'import_price_ron_kwh': 2.0}), self.client)
+        self.store.async_load.return_value = cached
+        await self.backfill.async_load()
+        calls = {call.args[1]['statistic_id']: call.args[2] for call in self.import_stats.call_args_list}
+        self.assertEqual(calls['reteleelectrice_ro:pod_detailed_import_cost'][-1]['sum'], 24)
+        self.assertEqual(calls['reteleelectrice_ro:pod_detailed_import'][-1]['sum'], 12)
+        self.assertEqual(self.backfill.data, cached)
+        self.backfill.import_price = 0
+        self.import_stats.reset_mock()
+        await self.backfill.async_load()
+        self.assertTrue(all(stat['sum'] == 0 for stat in self.import_stats.call_args_list[0].args[2]))

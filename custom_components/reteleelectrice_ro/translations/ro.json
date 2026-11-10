@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Rețele Electrice România",
+        "description": "Conectează contul tău de pe contulmeu.reteleelectrice.ro.",
+        "data": {
+          "email": "Email",
+          "password": "Parolă"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reautentificare Rețele Electrice România",
+        "description": "Parola contului nu mai este acceptată. Introdu parola actuală pentru a reconecta integrarea.",
+        "data": {
+          "password": "Parolă"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Emailul sau parola nu au fost acceptate.",
+      "cannot_connect": "Portalul nu a putut fi contactat."
+    },
+    "abort": {
+      "already_configured": "Acest cont este deja configurat."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Cost estimat al energiei",
+        "description": "Tarif fix în RON/kWh, inclusiv TVA și taxele per kWh. Se aplică întregului istoric păstrat; schimbarea lui recalculează toate estimările anterioare. Nu include abonamente sau alte costuri fixe.",
+        "data": {
+          "import_price_ron_kwh": "Preț import energie (RON/kWh)"
+        }
+      }
+    }
+  }
+}

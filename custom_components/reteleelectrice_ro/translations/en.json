@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Rețele Electrice România",
+        "description": "Connect your contulmeu.reteleelectrice.ro account.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reconnect Rețele Electrice România",
+        "description": "Enter the current account password to reconnect.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "The email or password was rejected.",
+      "cannot_connect": "Could not connect to the portal."
+    },
+    "abort": {
+      "already_configured": "This account is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Estimated energy cost",
+        "description": "Flat tariff in RON/kWh, including VAT and per-kWh charges. Applies to all retained history; changing it recalculates all past estimates. Excludes subscriptions and other fixed charges.",
+        "data": {
+          "import_price_ron_kwh": "Grid import price (RON/kWh)"
+        }
+      }
+    }
+  }
+}

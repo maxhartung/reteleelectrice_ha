@@ -2,7 +2,7 @@
 
 Independent integration for the customer portal's smart-meter readings and detailed energy history.
 
-Version 1.1.1 requires **Home Assistant 2026.11.0 or newer**.
+Version 1.2.0 requires **Home Assistant 2026.11.0 or newer**.
 
 The overview card shows four smart-meter values:
 
@@ -76,6 +76,39 @@ Downloaded history is retained beyond the portal's rolling window, and
 replayed with stable cumulative sums on restart. Corrections replace the
 same timestamps rather than adding energy a second time. Diagnostics include
 `backfill_statuses`; a detailed-data failure preserves the existing readings.
+
+## Estimated monthly cost
+
+Version 1.2.0 adds `reteleelectrice_ro:<pod>_detailed_import_cost` statistics in
+RON. The default estimate uses **1.06 RON/kWh**. This is a user-supplied estimate,
+not a tariff verified with your supplier. To change it, go to **Settings →
+Devices & services → Rețele Electrice România → Configure**, enter your total
+per-kWh price including VAT and applicable charges, and save. The integration
+reloads and recalculates estimated costs from cached energy history.
+
+The flat price applies to **all retained history**; changing it reprices past
+estimates too. Time-varying tariffs, fixed fees, export compensation, and invoice
+adjustments are not calculated. Published consumption normally ends yesterday,
+and missing intervals undercount the estimate until they are available.
+
+On your dashboard, select **Edit → Add card → Manual**, then paste:
+
+```yaml
+type: statistic
+entity: reteleelectrice_ro:ro001e110948168_detailed_import_cost
+name: Estimated electricity cost this month
+icon: mdi:cash
+stat_type: change
+period:
+  calendar:
+    period: month
+    offset: 0
+```
+
+Replace the POD with your own, in lowercase. See also
+[the card example](examples/monthly_cost_card.yaml). The native
+[Statistic card](https://www.home-assistant.io/dashboards/statistic/) accepts
+external statistics and automatically follows the current calendar month.
 
 ## Automatic requests
 

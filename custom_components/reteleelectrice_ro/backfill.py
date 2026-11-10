@@ -10,7 +10,7 @@ from homeassistant.components.recorder.models import StatisticMeanType
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 
 from .api import PortalError
-from .const import DOMAIN
+from .const import CONF_IMPORT_PRICE, DEFAULT_IMPORT_PRICE, DOMAIN
 from .load_curve import PORTAL_ZONE, hourly_energy, merge_load_row, parse_load_data
 from .storage import ConfirmedStore
 
@@ -23,6 +23,7 @@ class DetailedBackfill:
     def __init__(self, hass, entry, client):
         self.hass = hass
         self.client = client
+        self.import_price = entry.options.get(CONF_IMPORT_PRICE, DEFAULT_IMPORT_PRICE)
         self.store = ConfirmedStore(hass, 1, f'{DOMAIN}.{entry.entry_id}.curves', atomic_writes=True)
         self.data = {}
         self._next_attempt = {}
@@ -66,7 +67,7 @@ class DetailedBackfill:
         self._import_cached(pod)
 
     def _import_cached(self, pod):
-        for channel, label in (('WI', 'import'), ('WE', 'export')):
+        for channel, label in (('WI', 'import_cost'), ('WI', 'import'), ('WE', 'export')):
             try:
                 self._import_channel(pod, channel, label)
             except (HomeAssistantError, ValueError, KeyError, TypeError) as err:
@@ -75,13 +76,16 @@ class DetailedBackfill:
 
     def _import_channel(self, pod, channel, label):
         statistics = hourly_energy(self.data.get(pod, {}), channel)
+        is_cost = label == 'import_cost'
+        if is_cost:
+            statistics = [dict(stat, sum=round(stat['sum'] * self.import_price, 6)) for stat in statistics]
         if statistics:
             async_add_external_statistics(self.hass, {
                 'statistic_id': f'{DOMAIN}:{pod.lower()}_detailed_{label}',
                 'source': DOMAIN,
-                'name': f'{pod} detailed grid energy {label}',
-                'unit_of_measurement': 'kWh',
-                'unit_class': 'energy',
+                'name': f'{pod} estimated grid import cost' if is_cost else f'{pod} detailed grid energy {label}',
+                'unit_of_measurement': 'RON' if is_cost else 'kWh',
+                'unit_class': None if is_cost else 'energy',
                 'has_sum': True,
                 'mean_type': StatisticMeanType.NONE,
             }, statistics)

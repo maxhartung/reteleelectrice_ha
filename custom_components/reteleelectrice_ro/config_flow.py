@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import math
 from typing import Any
 
 import aiohttp
@@ -10,10 +11,10 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.const import CONF_PASSWORD
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 
 from .api import AuthenticationError, PortalError, ReteleElectriceClient
-from .const import CONF_EMAIL, DOMAIN
+from .const import CONF_EMAIL, CONF_IMPORT_PRICE, DEFAULT_IMPORT_PRICE, DOMAIN
 
 
 async def _validate_credentials(hass: HomeAssistant, email: str, password: str) -> None:
@@ -28,6 +29,11 @@ class ReteleElectriceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle setup through the Home Assistant UI."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        return ReteleElectriceOptionsFlow()
 
     async def async_step_reauth(
         self, entry_data: Mapping[str, Any]
@@ -96,4 +102,27 @@ class ReteleElectriceConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
+        )
+
+
+def _finite_price(value: float) -> float:
+    """Reject nonfinite tariffs before they can reach recorder statistics."""
+    if not math.isfinite(value):
+        raise vol.Invalid("Price must be finite")
+    return value
+
+
+class ReteleElectriceOptionsFlow(config_entries.OptionsFlow):
+    """Set the flat tariff used to estimate costs for retained history."""
+
+    async def async_step_init(self, user_input=None):
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema({
+                vol.Required(CONF_IMPORT_PRICE, default=self.config_entry.options.get(
+                    CONF_IMPORT_PRICE, DEFAULT_IMPORT_PRICE
+                )): vol.All(vol.Coerce(float), vol.Range(min=0), _finite_price),
+            }),
         )
