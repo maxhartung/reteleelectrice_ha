@@ -207,6 +207,9 @@ def _json_fragments(payload: str) -> list[Any]:
 def _portal_fragment_score(value: Any) -> int:
     """Score a JSON fragment by how strongly it resembles portal data."""
     field_weights = {
+        "ListData": 100,
+        "ReadingType": 40,
+        "DateT": 40,
         "dataIstantValueList": 100,
         "energyReadingList": 80,
         "sampleValues": 80,
@@ -717,3 +720,10 @@ class ReteleElectriceClient:
     async def async_read_meter_data(self, params: list[str]) -> Any:
         """Read the latest available result without requesting a new measurement."""
         return await self._call_vf_ws("FindOutMeterInstantData", params)
+
+    async def async_get_detailed_load(self, params: list[str], start, end) -> Any:
+        """Read maximum-granularity curves, independently of instant requests."""
+        return await self._call_vf_ws("FindOutMeterLoadData", [
+            params[2], params[0], params[1],
+            start.strftime("%d/%m/%Y"), end.strftime("%d/%m/%Y"), "ALL",
+        ])

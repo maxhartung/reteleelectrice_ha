@@ -1,7 +1,6 @@
 {
   "name": "Rețele Electrice România",
   "content_in_root": false,
-  "filename": "reteleelectrice_ro",
   "render_readme": true,
-  "homeassistant": "2024.1.0"
+  "homeassistant": "2026.11.0"
 }

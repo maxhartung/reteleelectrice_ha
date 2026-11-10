@@ -13,6 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .backfill import DetailedBackfill
 from .api import AuthenticationError, PortalError, ReteleElectriceClient, SessionExpiredError
 from .consumption_request import ConsumptionRequestState
 from .const import DEFAULT_UPDATE_INTERVAL, DOMAIN
@@ -28,6 +29,7 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, client: ReteleElectriceClient) -> None:
         super().__init__(hass, logger=LOGGER, name=DOMAIN, config_entry=entry,
                          update_interval=DEFAULT_UPDATE_INTERVAL, always_update=False)
+        self._backfill = DetailedBackfill(hass, entry, client)
         self.entry = entry
         self.client = client
         self._store = ConfirmedStore(hass, 1, f"{DOMAIN}.{entry.entry_id}.meter", atomic_writes=True)
@@ -43,6 +45,7 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def diagnostics(self) -> dict[str, Any]:
         """Expose polling outcomes without account IDs, cookies, or payloads."""
         return {
+            "backfill_statuses": list(self._backfill.status.values()),
             "poll_status": self._poll_status,
             "last_poll": self._last_poll,
             "portal_session_initialized": self.client.is_logged_in,
@@ -56,6 +59,7 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                       "last_requests": self._last_requests})
 
     async def _async_setup(self) -> None:
+        await self._backfill.async_load()
         saved = await self._store.async_load() or {}
         self._requests = ConsumptionRequestState(saved.get("attempts", []))
         self._meters = saved.get("meters", {})
@@ -127,6 +131,9 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except (PortalError, aiohttp.ClientError, TimeoutError) as err:
                     self._meter_status[pod] = type(err).__name__
                     LOGGER.warning("Smart-meter values unavailable: %s", type(err).__name__)
+            for pod in result:
+                if pod in self._params:
+                    await self._backfill.async_update(pod, self._params[pod])
             await self._save()
             self._poll_status = "ok"
             return {"pods": result}

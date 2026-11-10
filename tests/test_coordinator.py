@@ -79,7 +79,7 @@ def coordinator_class():
     # Stub only HA's framework boundary; execute the real coordinator unchanged.
     tree.body = [n for n in tree.body if not isinstance(n, (ast.Import, ast.ImportFrom)) or
                  isinstance(n, ast.ImportFrom) and n.module == '__future__']
-    namespace = dict(Any=object, DataUpdateCoordinator=CoordinatorBase, ConfirmedStore=confirmed_store_class(), datetime=datetime,
+    namespace = dict(DetailedBackfill=lambda *args: SimpleNamespace(async_load=AsyncMock(), async_update=AsyncMock(), status={}), Any=object, DataUpdateCoordinator=CoordinatorBase, ConfirmedStore=confirmed_store_class(), datetime=datetime,
                      timezone=timezone, logging=logging, DOMAIN='reteleelectrice_ro',
                      DEFAULT_UPDATE_INTERVAL=timedelta(minutes=5), PortalError=PortalError,
                      AuthenticationError=AuthError, ConfigEntryAuthFailed=AuthError,

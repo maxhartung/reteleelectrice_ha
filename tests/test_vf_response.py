@@ -49,6 +49,15 @@ class VfResponseTests(unittest.TestCase):
         exec(compile(module, str(MODULE_PATH), "exec"), namespace)
         return namespace["_parse_vf_response"]
 
+    def test_detailed_load_wrapper_returns_whole_response(self):
+        parse = self._parser()
+        expected = {'result': 'OK', 'ListData': [
+            {'Value': ['0,033', '0,045'], 'ReadingType': 'WI',
+             'Frequency': '15', 'DateT': '2026-11-01'}]}
+        import json
+        payload = '<html><span id="asyncResponse">' + json.dumps(expected) + '</span></html>'
+        self.assertEqual(parse(payload), expected)
+
     def test_json_inside_a4j_cdata_is_extracted(self) -> None:
         parse = self._parser()
         payload = (

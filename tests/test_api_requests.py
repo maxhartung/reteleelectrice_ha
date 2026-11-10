@@ -19,7 +19,7 @@ def client_class():
             selected.append(node)
         elif isinstance(node, ast.ClassDef) and node.name == 'ReteleElectriceClient':
             node.body = [method for method in node.body if isinstance(method, ast.AsyncFunctionDef) and method.name in
-                         {'async_request_meter_data', 'async_relogin', 'async_login'}]
+                         {'async_request_meter_data', 'async_relogin', 'async_login', 'async_get_detailed_load'}]
             selected.append(node)
     tree.body = selected
     namespace = dict(LOGIN_PAGE='https://example.test/login', BASE_URL='https://example.test', REQUEST_TIMEOUT=None)
@@ -75,3 +75,13 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(self.ns['PortalError']) as ctx:
             await self.client.async_login()
         self.assertNotIsInstance(ctx.exception, self.ns['AuthenticationError'])
+
+
+class DetailedRequestTests(unittest.IsolatedAsyncioTestCase):
+    async def test_live_portal_parameter_order(self):
+        from datetime import date
+        client = client_class()['ReteleElectriceClient']()
+        client._call_vf_ws = AsyncMock(return_value={'result': 'OK', 'ListData': []})
+        await client.async_get_detailed_load(['ACCOUNT', '', 'POD'], date(2026, 10, 10), date(2026, 11, 9))
+        client._call_vf_ws.assert_awaited_once_with('FindOutMeterLoadData',
+            ['POD', 'ACCOUNT', '', '10/10/2026', '09/11/2026', 'ALL'])

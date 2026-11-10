@@ -1,6 +1,8 @@
 # Rețele Electrice România for Home Assistant
 
-Independent integration for the customer portal's instantaneous smart-meter data.
+Independent integration for the customer portal's smart-meter readings and detailed energy history.
+
+Version 1.1.0 requires **Home Assistant 2026.11.0 or newer**.
 
 The overview card shows four smart-meter values:
 
@@ -33,6 +35,45 @@ them, not reconstructed at the meter's original measurement time.
 describes the required attributes and statistics checks. Old removed sensors
 may still appear as historical statistics; use the new Grid energy imported
 sensor rather than an old entity without a state.
+
+## Detailed energy backfill
+
+Version 1.1.0 automatically reads `FindOutMeterLoadData` for the previous 31
+calendar days, ending yesterday in Europe/Bucharest. It refreshes every six
+hours to pick up delayed publications and corrections, independently of the
+instant-meter request quota. The first fetch runs during integration setup.
+
+Original interval readings for all returned energy channels are retained in
+Home Assistant's integration storage across restarts. Complete hourly import
+and export totals are published as external long-term statistics:
+
+- `reteleelectrice_ro:<pod>_detailed_import`
+- `reteleelectrice_ro:<pod>_detailed_export`
+
+After updating and restarting Home Assistant, select **<POD> detailed grid
+energy import** under Energy dashboard → Energy imported from grid. Replace
+the cumulative meter sensor selection for that POD; selecting both counts the
+same energy twice. Export statistics can be selected for return to grid.
+These historical statistics do not create backdated sensor states. Today
+becomes available after the portal publishes its data, normally tomorrow.
+
+The portal's maximum granularity is typically 15 minutes. Home Assistant's
+external statistics import uses hourly totals. Only complete hours contribute
+energy. Across missing hours, the cumulative sum carries forward with no
+estimated consumption; the dashboard therefore undercounts until those
+readings become available. Replaying every hour also repairs old baseline
+values when earlier readings arrive. A shorter or incompatible partial
+response cannot replace a complete cached day.
+
+On daylight-saving transition days, a fixed 96-slot export does not identify
+the missing/repeated hour. Those intervals are retained in raw storage but
+contribute no energy to statistics. Proper 92/100-slot arrays can be imported.
+This can leave clock-change days undercounted.
+
+Downloaded history is retained beyond the portal's rolling window, and
+replayed with stable cumulative sums on restart. Corrections replace the
+same timestamps rather than adding energy a second time. Diagnostics include
+`backfill_statuses`; a detailed-data failure preserves the existing readings.
 
 ## Automatic requests
 
@@ -92,14 +133,33 @@ calculate consumption.
 
 ## Upgrade and dashboard
 
-Update with HACS, then restart Home Assistant. Obsolete integration entities are
+On Home Assistant 2026.11+, use **Settings → Marketplace** to install or update
+this integration. HACS installations migrate automatically to the built-in
+Marketplace. For a custom repository, use **Add from link** with
+`https://github.com/maxhartung/reteleelectrice_ha`, then install the integration.
+After an update, restart Home Assistant when prompted.
+
+The repository keeps `hacs.json`, including its minimum Home Assistant version,
+as required by Marketplace. It installs directly from `custom_components/`;
+there is no release ZIP asset. Older HA installations should retain an older
+compatible integration release.
+
+[Marketplace documentation](https://www.home-assistant.io/integrations/marketplace/)
+explains installation and migration. The external energy statistics use
+`mean_type` and `unit_class` explicitly, matching the
+[current recorder API](https://contributors.home-assistant.io/blog/2025/10/16/recorder-statistics-api-changes/).
+The Energy dashboard's new power-to-energy setup helper is unnecessary for
+these measured kWh curves; select the detailed import/export statistics for
+grid flows. The whole-home consumption option is for a whole-home meter,
+which can differ from grid import when solar or batteries are present.
+
+Obsolete integration entities are
 removed from the entity registry on setup. Existing voltage/current entity IDs
 are preserved. Historical recorder data is not purged.
 
-Remove any old button-press automations. The integration no longer fetches
-load curves, reading history, outages, supplier details,
-production, or average power. Only account/POD identifiers needed for the meter
-API are retained internally.
+Remove any old button-press automations. The integration fetches instant
+readings and detailed energy curves. It does not fetch reading archives,
+outages, supplier details, or average power.
 
 Use an Entities card with the four sensors. See
 [the card example](examples/smart_meter_card.yaml); substitute the IDs shown in

@@ -14,6 +14,7 @@ CONF_PASSWORD = "password"
 DEFAULT_UPDATE_INTERVAL = timedelta(minutes=5)
 ATTRIBUTION = "Data from contulmeu.reteleelectrice.ro"
 VF_PAGE_MAP = {
+    "FindOutMeterLoadData": "PED_ProxyCallWSAsync_Curve_VF",
     "ReqMeterInstantData": "PED_ProxyCallWSAsynSmartMeterIstantData",
     "FindOutMeterInstantData": "PED_ProxyCallWSAsynSmartMeterIstantData",
 }
