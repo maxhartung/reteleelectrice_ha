@@ -96,7 +96,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.client = AsyncMock()
         self.client.is_logged_in = True
         self.client.async_get_pods.return_value = [{'Name': 'POD', 'Smart_meter__c': True}]
-        self.client.async_meter_params.return_value = ['', '', 'POD']
+        self.client.async_meter_params.return_value = ['ACCOUNT', '', 'POD']
         self.client.async_read_meter_data.return_value = {'dataIstantValueList': [{
             'UR_VALUE': '230', 'IR_VALUE': '2', 'LAST_UPDATED': '06.09.2026 16:59:45',
             'energyReadingList': [{'ENERGY_TYPE': 'EA', 'VALUE': '496,220'}]}]}
@@ -257,3 +257,41 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIsInstance(ctx.exception, AuthError)
         self.client.async_relogin.assert_awaited_once()
         self.client.async_request_meter_data.assert_not_awaited()
+
+    async def test_failed_identifier_discovery_retries_without_caching_or_counting_quota(self):
+        self.client.async_meter_params.side_effect = [PortalError('no account identifier'), ['ACCOUNT', '', 'POD']]
+        await self.coordinator._async_update_data()
+        self.assertNotIn('POD', self.coordinator._params)
+        self.client.async_request_meter_data.assert_not_awaited()
+        self.coordinator._backfill.async_update.assert_not_awaited()
+        self.assertEqual(self.coordinator._requests.as_list(), [])
+        await self.coordinator._async_update_data()
+        self.assertEqual(self.coordinator._params['POD'], ['ACCOUNT', '', 'POD'])
+        self.assertEqual(self.client.async_meter_params.await_count, 2)
+        self.client.async_request_meter_data.assert_awaited_once()
+
+    async def test_startup_fetches_curves_before_any_instant_request(self):
+        events = []
+        async def curves(pod, params):
+            events.append('curves')
+        async def instant(params):
+            events.append('instant')
+        self.coordinator._backfill.async_update.side_effect = curves
+        self.client.async_request_meter_data.side_effect = instant
+        await self.coordinator._async_update_data()
+        self.assertEqual(events, ['curves', 'instant'])
+        self.coordinator._backfill.async_update.assert_awaited_once_with('POD', ['ACCOUNT', '', 'POD'])
+
+    async def test_curves_fetch_still_runs_when_instant_quota_write_fails(self):
+        self.coordinator._store.fail = True
+        with self.assertRaises(OSError):
+            await self.coordinator._async_update_data()
+        self.coordinator._backfill.async_update.assert_awaited_once()
+        self.client.async_request_meter_data.assert_not_awaited()
+
+    async def test_startup_fetches_curves_with_no_instant_quota_remaining(self):
+        self.coordinator._requests.can_request = lambda now: False
+        await self.coordinator._async_update_data()
+        self.coordinator._backfill.async_update.assert_awaited_once()
+        self.client.async_request_meter_data.assert_not_awaited()
+        self.client.async_read_meter_data.assert_awaited_once()

@@ -98,3 +98,12 @@ class BackfillTests(unittest.IsolatedAsyncioTestCase):
         for stat in statistics:
             self.assertIsNotNone(stat['start'].utcoffset())
             self.assertEqual((stat['start'].minute, stat['start'].second, stat['start'].microsecond), (0, 0, 0))
+
+    async def test_startup_imports_cached_curves_before_any_network_request(self):
+        self.store.async_load.return_value = {'POD': curve.parse_load_data(payload(day=self.yesterday.isoformat()))}
+        await self.backfill.async_load()
+        self.client.async_get_detailed_load.assert_not_awaited()
+        self.assertEqual(self.import_stats.call_args.args[2][-1]['sum'], 12)
+        # Startup replay must not delay the first fresh fetch by six hours.
+        await self.backfill.async_update('POD', ['id', '', 'POD'])
+        self.client.async_get_detailed_load.assert_awaited_once()

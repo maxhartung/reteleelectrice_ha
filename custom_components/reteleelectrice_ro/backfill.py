@@ -32,6 +32,8 @@ class DetailedBackfill:
         self.data = await self.store.async_load() or {}
         # Replay on startup too: a crash after saving but before recorder commit
         # must not permanently lose historical data.
+        for pod in self.data:
+            self._import_cached(pod)
 
     async def async_update(self, pod, params):
         now = datetime.now(PORTAL_ZONE)
@@ -61,6 +63,9 @@ class DetailedBackfill:
             LOGGER.warning('Detailed energy backfill unavailable: %s', type(err).__name__)
         # Full replay also repairs corrected historical values and recorder loss.
         # Statistic timestamps are upserted, never added to existing totals.
+        self._import_cached(pod)
+
+    def _import_cached(self, pod):
         for channel, label in (('WI', 'import'), ('WE', 'export')):
             try:
                 self._import_channel(pod, channel, label)

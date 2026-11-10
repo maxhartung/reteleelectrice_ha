@@ -98,6 +98,9 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if pod not in self._params:
                         self._params[pod] = await self.client.async_meter_params(pod)
                     params = self._params[pod]
+                    # Fetch historical curves on the first refresh, before any
+                    # quota write or slow instantaneous measurement request.
+                    await self._backfill.async_update(pod, params)
                     now = datetime.now(timezone.utc)
                     if self._requests.can_request(now):
                         self._requests.mark_requested(now)
@@ -131,9 +134,6 @@ class ReteleElectriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except (PortalError, aiohttp.ClientError, TimeoutError) as err:
                     self._meter_status[pod] = type(err).__name__
                     LOGGER.warning("Smart-meter values unavailable: %s", type(err).__name__)
-            for pod in result:
-                if pod in self._params:
-                    await self._backfill.async_update(pod, self._params[pod])
             await self._save()
             self._poll_status = "ok"
             return {"pods": result}

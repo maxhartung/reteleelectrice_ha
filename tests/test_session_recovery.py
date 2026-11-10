@@ -173,3 +173,55 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(detect('https://example.test/s/login?startURL=/meter'))
         self.assertFalse(detect('https://example.test/meter?startURL=/PEDRO_SiteLogin'))
         self.assertTrue(detect('https://example.test/', "<input type='password' name='pw'>"))
+
+    async def test_login_200_unknown_error_is_retryable(self):
+        for page in ('Service temporarily unavailable. Please retry later.', '<form><input type="password"></form>'):
+            client = self.ns['ReteleElectriceClient']('email', 'password', Session(
+                gets=[Response('<form id="login"></form>')], posts=[Response(page)]))
+            with self.assertRaises(self.ns['PortalProtocolError']) as ctx:
+                await client.async_login()
+            self.assertNotIsInstance(ctx.exception, self.ns['AuthenticationError'])
+            self.assertFalse(client.is_logged_in)
+
+    async def test_explicit_login_rejection_requires_reauthentication(self):
+        client = self.ns['ReteleElectriceClient']('email', 'password', Session(
+            gets=[Response('<form id="login"></form>')],
+            posts=[Response('<div>Your login attempt has failed. Please check your username and password.</div>')]))
+        with self.assertRaises(self.ns['AuthenticationError']):
+            await client.async_login()
+
+    async def test_redirect_back_to_login_without_credential_error_is_retryable(self):
+        post = Response('')
+        post.headers = {'Location': '/secur/frontdoor.jsp'}
+        client = self.ns['ReteleElectriceClient']('email', 'password', Session(
+            gets=[Response('<form id="login"></form>'), Response(''),
+                  Response('<form><input type="password"></form>', url='https://example.test/s/login')],
+            posts=[post]))
+        with self.assertRaises(self.ns['PortalProtocolError']):
+            await client.async_login()
+
+    async def test_empty_account_discovery_renews_once_and_resolves_identifiers(self):
+        client = self.client(Session())
+        client.async_get_account_info = AsyncMock(side_effect=[{}, {'CNP__c': 'ACCOUNT'}])
+        client.async_get_reading_archive_pod_details = AsyncMock(return_value={})
+        self.assertEqual(await client.async_meter_params('POD'), ['ACCOUNT', '', 'POD'])
+        client.async_login.assert_awaited_once()
+        self.assertEqual(client.async_get_account_info.await_count, 2)
+
+    async def test_persistently_empty_account_never_returns_request_parameters(self):
+        client = self.client(Session())
+        client.async_get_account_info = AsyncMock(return_value={'CNP__c': '  '})
+        client.async_get_reading_archive_pod_details = AsyncMock(return_value={})
+        with self.assertRaises(self.ns['PortalProtocolError']):
+            await client.async_meter_params('POD')
+        client.async_login.assert_awaited_once()
+        self.assertEqual(client.async_get_account_info.await_count, 2)
+        client.async_get_account_info.return_value = {'CNP__c': 'RECOVERED'}
+        self.assertEqual(await client.async_meter_params('POD'), ['RECOVERED', '', 'POD'])
+
+    async def test_account_identifier_fallback_avoids_unnecessary_renewal(self):
+        client = self.client(Session())
+        client.async_get_account_info = AsyncMock(return_value={})
+        client.async_get_reading_archive_pod_details = AsyncMock(return_value={'cnp': 'ACCOUNT'})
+        self.assertEqual(await client.async_meter_params('POD'), ['ACCOUNT', '', 'POD'])
+        client.async_login.assert_not_awaited()

@@ -2,7 +2,7 @@
 
 Independent integration for the customer portal's smart-meter readings and detailed energy history.
 
-Version 1.1.0 requires **Home Assistant 2026.11.0 or newer**.
+Version 1.1.1 requires **Home Assistant 2026.11.0 or newer**.
 
 The overview card shows four smart-meter values:
 
@@ -41,7 +41,9 @@ sensor rather than an old entity without a state.
 Version 1.1.0 automatically reads `FindOutMeterLoadData` for the previous 31
 calendar days, ending yesterday in Europe/Bucharest. It refreshes every six
 hours to pick up delayed publications and corrections, independently of the
-instant-meter request quota. The first fetch runs during integration setup.
+instant-meter request quota. On startup, cached curves are imported before
+login. The first refresh fetches fresh curves before any instant-meter
+submission, including when the instant-meter quota is exhausted.
 
 Original interval readings for all returned energy channels are retained in
 Home Assistant's integration storage across restarts. Complete hourly import
@@ -97,8 +99,11 @@ age visible. Partial readings do not combine voltage and current from different
 measurements. An empty initial POD discovery is retried. Expired sessions are
 renewed automatically with saved credentials, including after a submission
 fails authentication; the submission is never replayed. Temporary login-server
-failures are retried later. Invalid credentials require Home Assistant's
-reauthentication flow.
+failures, including HTTP 200 maintenance pages without a login redirect, are
+retried later. Explicit credential rejections require Home Assistant's
+reauthentication flow. Empty account identifiers renew the session once and
+remain eligible for discovery on later polls; they are never cached or used
+to submit quota-counted requests.
 
 Each configured account has its own cookie session. Salesforce session-error
 responses and login redirects trigger one renewal for reads. If the renewed

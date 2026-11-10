@@ -162,6 +162,20 @@ def _looks_like_login_page(url: str, page: str = "") -> bool:
     )
 
 
+def _login_credentials_rejected(page: str) -> bool:
+    """Recognize explicit credential errors, not arbitrary login-page text."""
+    text = html.unescape(re.sub(r"<[^>]+>", " ", page)).casefold()
+    text = " ".join(text.split())
+    return any(marker in text for marker in (
+        "your login attempt has failed",
+        "please check your username and password",
+        "invalid username or password",
+        "incorrect username or password",
+        "utilizator sau parolă incorect",
+        "utilizator sau parola incorect",
+    ))
+
+
 def _looks_like_auth_error(value: Any) -> bool:
     """Return whether an Aura error indicates an expired session."""
     text = str(value).lower()
@@ -393,7 +407,9 @@ class ReteleElectriceClient:
             redirect = response.headers.get("Location") or _extract_frontdoor(post_html)
 
         if not redirect:
-            raise AuthenticationError("Portal login did not return a Salesforce redirect")
+            if _login_credentials_rejected(post_html):
+                raise AuthenticationError("Portal rejected the credentials")
+            raise PortalProtocolError("Portal login did not return a Salesforce redirect")
         async with session.get(
             urljoin(BASE_URL, redirect),
             allow_redirects=True,
@@ -409,7 +425,9 @@ class ReteleElectriceClient:
                 raise PortalError(f"Portal shell returned HTTP {response.status}")
             shell_html = await response.text()
             if _looks_like_login_page(str(response.url), shell_html):
-                raise AuthenticationError("Portal returned to login after authentication")
+                if _login_credentials_rejected(shell_html):
+                    raise AuthenticationError("Portal rejected the credentials")
+                raise PortalProtocolError("Portal returned to login after authentication")
 
         self._bootstrap = self._extract_bootstrap(shell_html)
         self._logged_in = True
@@ -697,13 +715,20 @@ class ReteleElectriceClient:
 
     async def async_meter_params(self, pod_name: str) -> list[str]:
         """Resolve the identifiers required by the instant-meter service."""
-        account = await self.async_get_account_info()
-        cnp = str(account.get("CNP__c") or account.get("Fiscal_Code__c") or "") if isinstance(account, dict) else ""
-        if not cnp:
-            details = await self.async_get_reading_archive_pod_details(pod_name)
-            if isinstance(details, dict):
-                cnp = str(details.get("cnp") or details.get("CNP") or "")
-        return [cnp, "", pod_name]
+        for attempt in range(2):
+            account = await self.async_get_account_info()
+            cnp = str(account.get("CNP__c") or account.get("Fiscal_Code__c") or "").strip() if isinstance(account, dict) else ""
+            if not cnp:
+                details = await self.async_get_reading_archive_pod_details(pod_name)
+                if isinstance(details, dict):
+                    cnp = str(details.get("cnp") or details.get("CNP") or "").strip()
+            if cnp:
+                return [cnp, "", pod_name]
+            # Guest Salesforce responses can look successful but contain no
+            # account identifiers. Renew once; never cache or submit empties.
+            if not attempt:
+                await self.async_relogin()
+        raise PortalProtocolError("Portal returned no account identifier after session renewal")
 
     async def async_request_meter_data(self, params: list[str]) -> Any:
         """Submit once; an ambiguous failure must never trigger another submission."""
